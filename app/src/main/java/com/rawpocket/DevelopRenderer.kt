@@ -128,7 +128,7 @@ class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     private companion object {
         const val TAG = "RawPocketGL"
-        const val PARAM_COUNT = 10  // igual que Params::kCount en develop.h
+        const val PARAM_COUNT = 39  // igual que Params::kCount en develop.h
         const val BG = 0x0E / 255f
     }
 }

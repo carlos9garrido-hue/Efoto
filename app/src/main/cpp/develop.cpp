@@ -71,6 +71,8 @@ Params Params::fromArray(const float* a) {
     p.tint = a[7];
     p.vibrance = a[8];
     p.saturation = a[9];
+    for (int i = 0; i < Params::kCurvePoints; ++i) p.curve[i] = a[10 + i];
+    for (int i = 0; i < Params::kHslBands * 3; ++i) p.hsl[i] = a[10 + Params::kCurvePoints + i];
     return p;
 }
 
@@ -81,6 +83,76 @@ Developer::Developer(const Params& p) : p_(p) {
     gain_[1] = ev * (1.f - 0.25f * p.tint);
     gain_[2] = ev * (1.f - 0.35f * p.temperature);
     hlk_ = std::max(0.f, -p.highlights) * 3.f;
+
+    // Curva: interpolación cúbica de Hermite con tangentes monótonas (sin sobreimpulsos).
+    float sum = 0.f;
+    for (int i = 0; i < Params::kCurvePoints; ++i) {
+        curveY_[i] = clamp01(0.25f * i + p.curve[i]);
+        sum += std::fabs(p.curve[i]);
+    }
+    curveActive_ = sum > 0.f;
+    float d[4];
+    for (int i = 0; i < 4; ++i) d[i] = (curveY_[i + 1] - curveY_[i]) / 0.25f;
+    curveM_[0] = d[0];
+    curveM_[4] = d[3];
+    for (int i = 1; i < 4; ++i)
+        curveM_[i] = (d[i - 1] * d[i] <= 0.f) ? 0.f : 2.f * d[i - 1] * d[i] / (d[i - 1] + d[i]);
+
+    float hs = 0.f;
+    for (float v : p.hsl) hs += std::fabs(v);
+    hslActive_ = hs > 0.f;
+}
+
+float Developer::curveAt(float x) const {
+    float xs = x * 4.f;
+    int i = std::min(3, static_cast<int>(std::floor(xs)));
+    float t = xs - static_cast<float>(i), t2 = t * t, t3 = t2 * t;
+    float r = (2.f * t3 - 3.f * t2 + 1.f) * curveY_[i] + (t3 - 2.f * t2 + t) * 0.25f * curveM_[i] +
+              (-2.f * t3 + 3.f * t2) * curveY_[i + 1] + (t3 - t2) * 0.25f * curveM_[i + 1];
+    return clamp01(r);
+}
+
+namespace {
+
+inline float mod6(float x) { return x - 6.f * std::floor(x / 6.f); }
+
+// Centros de las 8 bandas (grados de tono); el último es el rojo otra vez (360).
+constexpr float kBandCenter[9] = {0.f, 30.f, 60.f, 120.f, 180.f, 240.f, 270.f, 300.f, 360.f};
+
+}  // namespace
+
+// HSL por color: los pesos de banda se interpolan linealmente entre centros contiguos.
+// Los grises no cambian (el tono no está definido y las ganancias se escalan con la saturación).
+void Developer::applyHsl(float c[3]) const {
+    float mx = std::max(c[0], std::max(c[1], c[2]));
+    float mn = std::min(c[0], std::min(c[1], c[2]));
+    float d = mx - mn;
+    if (d <= 0.f || mx <= 0.f) return;
+
+    float s0 = d / mx, v = mx, h;
+    if (mx == c[0]) h = (c[1] - c[2]) / d;
+    else if (mx == c[1]) h = (c[2] - c[0]) / d + 2.f;
+    else h = (c[0] - c[1]) / d + 4.f;
+    h = mod6(h) * 60.f;
+
+    int k = 0;
+    for (int i = 1; i < 8; ++i)
+        if (h >= kBandCenter[i]) k = i;
+    float t = (h - kBandCenter[k]) / (kBandCenter[k + 1] - kBandCenter[k]);
+    int a = k, b = (k + 1) % 8;
+    auto mixBand = [&](int ch) { return (1.f - t) * p_.hsl[a * 3 + ch] + t * p_.hsl[b * 3 + ch]; };
+    float dh = mixBand(0), ds = mixBand(1), dl = mixBand(2);
+
+    h += dh * 30.f;
+    float s = clamp01(s0 * (1.f + ds));
+    v = clamp01(v * (1.f + 0.5f * dl * s0));
+
+    float h6 = mod6(h / 60.f);
+    constexpr float K[3] = {0.f, 4.f, 2.f};
+    for (int i = 0; i < 3; ++i) {
+        float q = clamp01(std::fabs(mod6(h6 + K[i]) - 3.f) - 1.f);
+        c[i] = v * (1.f - s + s * q);
+    }
 }
 
 void Developer::pixel(float r, float g, float b, uint8_t* out) const {
@@ -110,6 +182,7 @@ void Developer::pixel(float r, float g, float b, uint8_t* out) const {
     y2 += p_.blacks * 0.20f * (1.f - smoothstep(0.f, 0.35f, y));
     y2 = 0.5f + (y2 - 0.5f) * (1.f + 0.8f * p_.contrast);
     y2 = clamp01(y2);
+    if (curveActive_) y2 = curveAt(y2);
 
     constexpr float eps = 0.002f;
     float scale = (y2 + eps) / (y + eps);
@@ -122,6 +195,9 @@ void Developer::pixel(float r, float g, float b, uint8_t* out) const {
     float sat = (1.f + p_.saturation) * (1.f + p_.vibrance * (1.f - chroma));
     if (sat < 0.f) sat = 0.f;
     for (float& v : c) v = y2 + (v - y2) * sat;
+
+    for (float& v : c) v = clamp01(v);
+    if (hslActive_) applyHsl(c);
 
     for (int i = 0; i < 3; ++i) out[i] = static_cast<uint8_t>(clamp01(c[i]) * 255.f + 0.5f);
 }

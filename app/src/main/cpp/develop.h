@@ -9,7 +9,10 @@ namespace rp {
 
 // El orden de los campos debe coincidir con EditParams.toFloatArray() en Kotlin.
 struct Params {
-    static constexpr int kCount = 10;
+    // 10 básicos + 5 puntos de curva + 8 bandas de color x (tono, saturación, luminosidad)
+    static constexpr int kCurvePoints = 5;  // en x = 0, .25, .5, .75, 1
+    static constexpr int kHslBands = 8;     // rojo, naranja, amarillo, verde, aqua, azul, púrpura, magenta
+    static constexpr int kCount = 10 + kCurvePoints + kHslBands * 3;
     float exposure = 0;     // EV, -5 .. +5
     float contrast = 0;     // -1 .. +1
     float highlights = 0;   // -1 .. +1
@@ -20,6 +23,10 @@ struct Params {
     float tint = 0;         // -1 (verde) .. +1 (magenta)
     float vibrance = 0;     // -1 .. +1
     float saturation = 0;   // -1 .. +1
+    // Curva tonal: desplazamiento respecto a la diagonal en cada punto (-0.25 .. +0.25).
+    float curve[kCurvePoints] = {0, 0, 0, 0, 0};
+    // HSL: por banda [tono, saturación, luminosidad], cada uno -1 .. +1.
+    float hsl[kHslBands * 3] = {};
 
     static Params fromArray(const float* a);
 };
@@ -31,9 +38,16 @@ public:
     void pixel(float r, float g, float b, uint8_t* out) const;
 
 private:
+    void applyHsl(float c[3]) const;
+    float curveAt(float x) const;
+
     Params p_;
     float gain_[3];
     float hlk_;
+    bool curveActive_ = false;
+    bool hslActive_ = false;
+    float curveY_[Params::kCurvePoints];
+    float curveM_[Params::kCurvePoints];  // tangentes (monótonas, estilo PCHIP)
 };
 
 // Reduce una imagen RGB16 tomando el promedio de bloques step x step.

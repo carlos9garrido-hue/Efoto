@@ -21,6 +21,59 @@ int main(int argc, char** argv) {
     if (argc < 4) { std::printf("uso: %s a.dng a_o6.dng outdir\n", argv[0]); return 2; }
     std::string a = argv[1], a6 = argv[2], outdir = argv[3];
 
+    std::printf("[curva y HSL]\n");
+    {
+        auto px = [](const rp::Params& p, float r, float g, float b, uint8_t* o) {
+            rp::Developer(p).pixel(r, g, b, o);
+        };
+        uint8_t base[3], o[3];
+        rp::Params none;
+        px(none, 0.18f, 0.18f, 0.18f, base);
+
+        rp::Params up; up.curve[2] = 0.2f;
+        px(up, 0.18f, 0.18f, 0.18f, o);
+        CHECK(o[0] > base[0] + 20 && o[0] == o[1] && o[1] == o[2], "curva: subir el punto medio aclara los medios");
+        px(up, 0.f, 0.f, 0.f, o);
+        CHECK(o[0] == 0, "curva: el negro sigue en 0");
+        px(up, 1.f, 1.f, 1.f, o);
+        CHECK(o[0] == 255, "curva: el blanco sigue en 255");
+        rp::Params down; down.curve[2] = -0.2f;
+        px(down, 0.18f, 0.18f, 0.18f, o);
+        CHECK(o[0] < base[0] - 20, "curva: bajar el punto medio oscurece");
+
+        rp::Params all;
+        for (float& v : all.hsl) v = 1.f;
+        uint8_t g1[3], g2[3];
+        px(none, 0.3f, 0.3f, 0.3f, g1);
+        px(all, 0.3f, 0.3f, 0.3f, g2);
+        CHECK(g1[0] == g2[0] && g1[1] == g2[1] && g1[2] == g2[2], "HSL: un gris no cambia con ninguna banda");
+
+        // Rojo (banda 0): saturación -1 lo deja gris; el verde (banda 3) no se toca.
+        rp::Params red; red.hsl[0 * 3 + 1] = -1.f;
+        uint8_t r0[3], r1[3], gr0[3], gr1[3];
+        px(none, 0.5f, 0.05f, 0.05f, r0);
+        px(red, 0.5f, 0.05f, 0.05f, r1);
+        CHECK(r0[0] - r0[1] > 60, "rojo de prueba: saturado sin editar");
+        CHECK(std::abs(r1[0] - r1[1]) <= 1 && std::abs(r1[1] - r1[2]) <= 1, "HSL: rojo con saturación -100 queda gris");
+        px(none, 0.05f, 0.4f, 0.05f, gr0);
+        px(red, 0.05f, 0.4f, 0.05f, gr1);
+        CHECK(gr0[0] == gr1[0] && gr0[1] == gr1[1] && gr0[2] == gr1[2], "HSL: ajustar el rojo no toca al verde");
+
+        // Tono: rojo +1 lo gira hacia naranja (sube el verde, no cambia el máximo).
+        rp::Params hue; hue.hsl[0 * 3 + 0] = 1.f;
+        uint8_t h1[3];
+        px(hue, 0.5f, 0.05f, 0.05f, h1);
+        CHECK(h1[1] > r0[1] + 30 && h1[0] >= r0[0] - 1, "HSL: tono +100 en rojo lo gira hacia naranja");
+
+        // Luminosidad: el amarillo (banda 2) -1 lo oscurece, +1 lo aclara.
+        rp::Params lm, ln; lm.hsl[2 * 3 + 2] = -1.f; ln.hsl[2 * 3 + 2] = 1.f;
+        uint8_t y0[3], ym[3], yp[3];
+        px(none, 0.4f, 0.4f, 0.02f, y0);
+        px(lm, 0.4f, 0.4f, 0.02f, ym);
+        px(ln, 0.4f, 0.4f, 0.02f, yp);
+        CHECK(ym[0] < y0[0] - 20 && yp[0] > y0[0], "HSL: luminosidad del amarillo oscurece y aclara");
+    }
+
     std::printf("[half-float] conversión para la textura GPU\n");
     {
         CHECK(rp::floatToHalf(0.f) == 0x0000 && rp::floatToHalf(1.f) == 0x3C00 &&

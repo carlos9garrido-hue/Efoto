@@ -20,21 +20,29 @@ const frag = fs.readFileSync(path.join(SHADERS, 'develop.frag'), 'utf8');
 const inFile = path.join(work, 'in.rgb16');
 execFileSync('python3', [path.join(__dirname, 'gen_image.py'), inFile]);
 
-// Orden: exposición, contraste, luces altas, sombras, blancos, negros, temperatura, matiz, intensidad, saturación
+// Orden de los 39 parámetros (igual que Params en develop.h)
 const names = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temperature', 'tint', 'vibrance', 'saturation'];
-const cases = [{ name: 'neutro', p: new Array(10).fill(0) }];
-const extreme = [2, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+for (let i = 0; i < 5; i++) names.push(`curve${i}`);
+const bands = ['rojo', 'naranja', 'amarillo', 'verde', 'aqua', 'azul', 'purpura', 'magenta'];
+for (const b of bands) for (const k of ['tono', 'sat', 'lum']) names.push(`${b}-${k}`);
+const N = names.length;  // 39
+
+const amp = (i) => (i === 0 ? 1.5 : i >= 10 && i < 15 ? 0.2 : 0.7);
+const cases = [{ name: 'neutro', p: new Array(N).fill(0) }];
 names.forEach((n, i) => {
   for (const sign of [1, -1]) {
-    const p = new Array(10).fill(0);
-    p[i] = sign * (i === 0 ? 1.5 : 0.7);
+    const p = new Array(N).fill(0);
+    p[i] = sign * amp(i);
     cases.push({ name: `${n} ${sign > 0 ? '+' : '-'}`, p });
   }
 });
-cases.push({ name: 'todo al máximo', p: extreme });
-cases.push({ name: 'todo al mínimo', p: extreme.map((v) => -v) });
-cases.push({ name: 'combinado A', p: [0.4, 0.25, -0.5, 0.4, 0.1, -0.2, 0.15, -0.1, 0.3, -0.1] });
-cases.push({ name: 'combinado B', p: [-1.2, -0.3, 0.2, -0.6, -0.3, 0.5, -0.4, 0.3, -0.5, 0.4] });
+const maxAll = names.map((_, i) => (i === 0 ? 2 : i >= 10 && i < 15 ? 0.25 : 1));
+cases.push({ name: 'todo al máximo', p: maxAll });
+cases.push({ name: 'todo al mínimo', p: maxAll.map((v) => -v) });
+// Combinaciones pseudoaleatorias reproducibles
+let seed = 42;
+const rnd = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296) * 2 - 1;
+for (let k = 0; k < 12; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.map((_, i) => rnd() * maxAll[i]) });
 
 (async () => {
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });

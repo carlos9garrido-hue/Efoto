@@ -1,6 +1,8 @@
 package com.rawpocket
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -46,6 +49,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.composed
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -158,6 +165,7 @@ private fun ReadyScreen(
     onExport: () -> Unit,
 ) {
     var group by rememberSaveable { mutableStateOf(Group.LIGHT) }
+    var band by rememberSaveable { mutableStateOf(0) }  // banda de color seleccionada en HSL
 
     Column(Modifier.fillMaxSize()) {
         TopBar(state, onPick, onExport)
@@ -224,7 +232,13 @@ private fun ReadyScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                Adjustment.entries.filter { it.group == group }.forEach { adj ->
+                when (group) {
+                    Group.CURVE -> CurvePreview(state.params)
+                    Group.HSL -> BandPicker(band, state.params) { band = it }
+                    else -> Unit
+                }
+                val bandFilter = if (group == Group.HSL) Band.entries[band] else null
+                Adjustment.entries.filter { it.group == group && it.band == bandFilter }.forEach { adj ->
                     AdjustmentRow(
                         adjustment = adj,
                         value = adj.get(state.params),
@@ -318,6 +332,72 @@ private fun AdjustmentRow(
                 inactiveTrackColor = Palette.SurfaceHigh,
             ),
         )
+    }
+}
+
+/** Dibuja la curva tonal resultante (misma fórmula que el motor) sobre una rejilla. */
+@Composable
+private fun CurvePreview(params: EditParams) {
+    val offsets = params.curveOffsets()
+    val accent = Palette.Accent
+    val grid = Palette.Outline
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .height(110.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Palette.SurfaceHigh)
+    ) {
+        val w = size.width
+        val h = size.height
+        for (i in 1..3) {
+            val f = i / 4f
+            drawLine(grid, Offset(w * f, 0f), Offset(w * f, h), strokeWidth = 1f)
+            drawLine(grid, Offset(0f, h * f), Offset(w, h * f), strokeWidth = 1f)
+        }
+        drawLine(grid, Offset(0f, h), Offset(w, 0f), strokeWidth = 1f)  // diagonal = sin cambios
+
+        val path = Path()
+        val steps = 64
+        for (i in 0..steps) {
+            val x = i / steps.toFloat()
+            val px = x * w
+            val py = h - curveValue(offsets, x) * h
+            if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
+        }
+        drawPath(path, accent, style = Stroke(width = 3f))
+        for (i in 0 until Adjustment.CURVE_POINTS) {
+            val x = i / 4f
+            drawCircle(accent, radius = 5f, center = Offset(w * x, h - curveValue(offsets, x) * h))
+        }
+    }
+}
+
+/** Selector de banda de color para HSL; un punto oscuro marca las bandas con ediciones. */
+@Composable
+private fun BandPicker(selected: Int, params: EditParams, onSelect: (Int) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Band.entries.forEachIndexed { i, band ->
+            val edited = Adjustment.bandRange(i).any { params.values[it] != 0f }
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(Color(band.argb))
+                    .then(if (i == selected) Modifier.border(2.dp, Palette.TextPrimary, CircleShape) else Modifier)
+                    .clickable { onSelect(i) },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (edited) Box(Modifier.size(6.dp).clip(CircleShape).background(Palette.Background))
+            }
+        }
     }
 }
 
