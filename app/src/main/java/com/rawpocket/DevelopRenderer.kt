@@ -1,0 +1,134 @@
+package com.rawpocket
+
+import android.content.Context
+import android.opengl.GLES30
+import android.opengl.GLSurfaceView
+import android.util.Log
+import java.nio.ByteBuffer
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
+import kotlin.math.min
+import kotlin.math.roundToInt
+
+/**
+ * Vista previa lista para la GPU: RGBA half-float lineal (8 bytes por píxel) en un búfer directo.
+ * Es independiente de la sesión nativa, así que puede vivir en el hilo de GL sin riesgo de carreras.
+ */
+class GpuPhoto(val width: Int, val height: Int, val data: ByteBuffer)
+
+/**
+ * Dibuja la foto aplicando el revelado en un fragment shader (assets/shaders/develop.frag).
+ * El shader replica Developer::pixel() de C++, que es lo que usa la exportación a resolución completa.
+ */
+class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
+
+    /** Se asignan desde el hilo principal y se leen en el hilo de GL. */
+    @Volatile var photo: GpuPhoto? = null
+    @Volatile var params: FloatArray = FloatArray(PARAM_COUNT)
+
+    private var program = 0
+    private var texture = 0
+    private var paramsLocation = -1
+    private var uploaded: GpuPhoto? = null
+    private var surfaceWidth = 1
+    private var surfaceHeight = 1
+
+    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        // Si el contexto se pierde (o se recrea) hay que volver a subir la textura.
+        uploaded = null
+        program = buildProgram("shaders/develop.vert", "shaders/develop.frag")
+        if (program == 0) return
+
+        paramsLocation = GLES30.glGetUniformLocation(program, "uParams")
+        val tex = IntArray(1)
+        GLES30.glGenTextures(1, tex, 0)
+        texture = tex[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glUseProgram(program)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uTex"), 0)
+    }
+
+    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+        surfaceWidth = width.coerceAtLeast(1)
+        surfaceHeight = height.coerceAtLeast(1)
+    }
+
+    override fun onDrawFrame(gl: GL10?) {
+        GLES30.glClearColor(BG, BG, BG + 2f / 255f, 1f)  // #0E0E10, igual que Palette.Background
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        val p = photo ?: return
+        if (program == 0) return
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        if (p !== uploaded) {
+            p.data.position(0)
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, p.width, p.height, 0,
+                GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, p.data,
+            )
+            uploaded = p
+        }
+
+        // Ajuste "contain": la foto entera, centrada, sin deformarse.
+        val scale = min(surfaceWidth.toFloat() / p.width, surfaceHeight.toFloat() / p.height)
+        val w = (p.width * scale).roundToInt().coerceIn(1, surfaceWidth)
+        val h = (p.height * scale).roundToInt().coerceIn(1, surfaceHeight)
+        GLES30.glViewport((surfaceWidth - w) / 2, (surfaceHeight - h) / 2, w, h)
+
+        GLES30.glUseProgram(program)
+        val values = params
+        GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, values, 0)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+    }
+
+    // ---------------------------------------------------------------- shaders
+
+    private fun buildProgram(vertexAsset: String, fragmentAsset: String): Int {
+        val vs = compile(GLES30.GL_VERTEX_SHADER, readAsset(vertexAsset))
+        val fs = compile(GLES30.GL_FRAGMENT_SHADER, readAsset(fragmentAsset))
+        if (vs == 0 || fs == 0) return 0
+        val prog = GLES30.glCreateProgram()
+        GLES30.glAttachShader(prog, vs)
+        GLES30.glAttachShader(prog, fs)
+        GLES30.glLinkProgram(prog)
+        val ok = IntArray(1)
+        GLES30.glGetProgramiv(prog, GLES30.GL_LINK_STATUS, ok, 0)
+        GLES30.glDeleteShader(vs)
+        GLES30.glDeleteShader(fs)
+        if (ok[0] == 0) {
+            Log.e(TAG, "Error al enlazar el programa: ${GLES30.glGetProgramInfoLog(prog)}")
+            GLES30.glDeleteProgram(prog)
+            return 0
+        }
+        return prog
+    }
+
+    private fun compile(type: Int, source: String): Int {
+        val shader = GLES30.glCreateShader(type)
+        GLES30.glShaderSource(shader, source)
+        GLES30.glCompileShader(shader)
+        val ok = IntArray(1)
+        GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, ok, 0)
+        if (ok[0] == 0) {
+            Log.e(TAG, "Error al compilar el shader: ${GLES30.glGetShaderInfoLog(shader)}")
+            GLES30.glDeleteShader(shader)
+            return 0
+        }
+        return shader
+    }
+
+    private fun readAsset(name: String): String =
+        context.assets.open(name).bufferedReader().use { it.readText() }
+
+    private companion object {
+        const val TAG = "RawPocketGL"
+        const val PARAM_COUNT = 10  // igual que Params::kCount en develop.h
+        const val BG = 0x0E / 255f
+    }
+}
