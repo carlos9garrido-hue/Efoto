@@ -117,7 +117,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val h = RawNative.nativeOpen(file.absolutePath, PREVIEW_LONG_EDGE)
-        if (h <= 0L) return failure("No se pudo abrir la foto: ${RawNative.nativeErrorText(h.toInt())}")
+        if (h <= 0L) return failure("No se pudo abrir la foto: ${RawNative.nativeErrorText(h.toInt())} (código $h, archivo \"$name\", ${file.length()} bytes)")
 
         val w = RawNative.nativePreviewWidth(h)
         val ht = RawNative.nativePreviewHeight(h)

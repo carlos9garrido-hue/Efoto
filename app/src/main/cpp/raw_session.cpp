@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <new>
 #include <thread>
 
 #include "image_input.h"
@@ -119,7 +120,15 @@ int openSession(const std::string& path, int previewLongEdge, std::unique_ptr<Se
     s->path = path;
 
     Decoded dec;
-    int rc = decode(path.c_str(), /*half=*/true, dec);
+    int rc;
+    try {
+        rc = decode(path.c_str(), /*half=*/true, dec);
+    } catch (const std::bad_alloc&) {
+        return LIBRAW_UNSUFFICIENT_MEMORY;
+    } catch (...) {
+        return LIBRAW_UNSPECIFIED_ERROR;
+    }
+    if (rc > 0) rc = kErrImageRead;  // errno del sistema: se trata como error de lectura
     if (rc != 0) return rc;
 
     int longEdge = std::max(dec.width(), dec.height());
@@ -200,7 +209,10 @@ std::string errorText(int code) {
         case LIBRAW_IO_ERROR: return "No se pudo leer el archivo (¿dañado o incompleto?)";
         case LIBRAW_UNSUFFICIENT_MEMORY: return "Memoria insuficiente para procesar este RAW";
         case LIBRAW_DATA_ERROR: return "Los datos del RAW están dañados";
-        default: return libraw_strerror(code);
+        default: {
+            std::string t = libraw_strerror(code);
+            return t == "Unknown error code" ? "Error desconocido" : t;
+        }
     }
 }
 
