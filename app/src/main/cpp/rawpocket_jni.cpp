@@ -4,7 +4,9 @@
 #include <android/log.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
 #include "develop.h"
 #include "raw_session.h"
@@ -21,6 +23,28 @@ std::string toStd(JNIEnv* env, jstring s) {
     return out;
 }
 
+// Las sesiones se entregan a Kotlin como números pequeños (1, 2, 3…), no como punteros: en Android
+// arm64 los punteros del montón llevan etiquetas en el byte alto y pueden parecer negativos, y
+// Kotlin usa los valores negativos como códigos de error.
+std::mutex gMutex;
+std::unordered_map<jlong, std::unique_ptr<rp::Session>> gSessions;
+jlong gNextId = 1;
+
+jlong registerSession(std::unique_ptr<rp::Session> s) {
+    std::lock_guard<std::mutex> lock(gMutex);
+    jlong id = gNextId++;
+    gSessions[id] = std::move(s);
+    return id;
+}
+
+// Devuelve la sesión o nullptr. Kotlin serializa el uso de cada sesión con su propio candado,
+// así que no se desaloja mientras se usa (cerrar espera a ese candado).
+rp::Session* lookup(jlong id) {
+    std::lock_guard<std::mutex> lock(gMutex);
+    auto it = gSessions.find(id);
+    return it == gSessions.end() ? nullptr : it->second.get();
+}
+
 }  // namespace
 
 extern "C" {
@@ -35,29 +59,32 @@ Java_com_rawpocket_RawNative_nativeOpen(JNIEnv* env, jobject, jstring jpath, jin
         LOGE("open failed (%d): %s", rc, rp::errorText(rc).c_str());
         return rc;
     }
-    return reinterpret_cast<jlong>(session.release());
+    return registerSession(std::move(session));
 }
 
 JNIEXPORT jint JNICALL
 Java_com_rawpocket_RawNative_nativePreviewWidth(JNIEnv*, jobject, jlong h) {
-    return h > 0 ? reinterpret_cast<rp::Session*>(h)->pw : 0;
+    auto* s = lookup(h);
+    return s ? s->pw : 0;
 }
 
 JNIEXPORT jint JNICALL
 Java_com_rawpocket_RawNative_nativePreviewHeight(JNIEnv*, jobject, jlong h) {
-    return h > 0 ? reinterpret_cast<rp::Session*>(h)->ph : 0;
+    auto* s = lookup(h);
+    return s ? s->ph : 0;
 }
 
 JNIEXPORT jstring JNICALL
 Java_com_rawpocket_RawNative_nativeInfo(JNIEnv* env, jobject, jlong h) {
-    if (h <= 0) return env->NewStringUTF("");
-    return env->NewStringUTF(reinterpret_cast<rp::Session*>(h)->info.c_str());
+    auto* s = lookup(h);
+    return env->NewStringUTF(s ? s->info.c_str() : "");
 }
 
 JNIEXPORT jint JNICALL
 Java_com_rawpocket_RawNative_nativeThumbnail(JNIEnv* env, jobject, jlong h, jstring jpath, jint edge) {
-    if (h <= 0 || !jpath) return rp::kErrBadArgs;
-    return rp::exportThumbnail(*reinterpret_cast<rp::Session*>(h), toStd(env, jpath), edge, 85);
+    auto* s = lookup(h);
+    if (!s || !jpath) return rp::kErrBadArgs;
+    return rp::exportThumbnail(*s, toStd(env, jpath), edge, 85);
 }
 
 JNIEXPORT jstring JNICALL
@@ -70,8 +97,8 @@ Java_com_rawpocket_RawNative_nativeErrorText(JNIEnv* env, jobject, jint code) {
 // de la sesión nativa.
 JNIEXPORT jboolean JNICALL
 Java_com_rawpocket_RawNative_nativeFillPreviewHalf(JNIEnv* env, jobject, jlong h, jobject buffer) {
-    if (h <= 0 || !buffer) return JNI_FALSE;
-    auto* s = reinterpret_cast<rp::Session*>(h);
+    auto* s = lookup(h);
+    if (!s || !buffer) return JNI_FALSE;
     void* dst = env->GetDirectBufferAddress(buffer);
     const jlong need = static_cast<jlong>(s->pw) * s->ph * 8;
     if (!dst || env->GetDirectBufferCapacity(buffer) < need) return JNI_FALSE;
@@ -83,8 +110,8 @@ Java_com_rawpocket_RawNative_nativeFillPreviewHalf(JNIEnv* env, jobject, jlong h
 JNIEXPORT jboolean JNICALL
 Java_com_rawpocket_RawNative_nativeRender(JNIEnv* env, jobject, jlong h, jfloatArray jparams,
                                           jobject bitmap) {
-    if (h <= 0 || !jparams || !bitmap) return JNI_FALSE;
-    auto* s = reinterpret_cast<rp::Session*>(h);
+    auto* s = lookup(h);
+    if (!s || !jparams || !bitmap) return JNI_FALSE;
     if (env->GetArrayLength(jparams) < rp::Params::kCount) return JNI_FALSE;
 
     AndroidBitmapInfo info;
@@ -111,18 +138,20 @@ Java_com_rawpocket_RawNative_nativeRender(JNIEnv* env, jobject, jlong h, jfloatA
 JNIEXPORT jint JNICALL
 Java_com_rawpocket_RawNative_nativeExport(JNIEnv* env, jobject, jlong h, jfloatArray jparams,
                                           jstring joutPath, jint quality, jint maxEdge) {
-    if (h <= 0 || !jparams || !joutPath) return rp::kErrBadArgs;
+    auto* s = lookup(h);
+    if (!s || !jparams || !joutPath) return rp::kErrBadArgs;
     if (env->GetArrayLength(jparams) < rp::Params::kCount) return rp::kErrBadArgs;
 
     float p[rp::Params::kCount];
     env->GetFloatArrayRegion(jparams, 0, rp::Params::kCount, p);
-    return rp::exportJpeg(*reinterpret_cast<rp::Session*>(h), rp::Params::fromArray(p),
+    return rp::exportJpeg(*s, rp::Params::fromArray(p),
                           toStd(env, joutPath), quality, maxEdge);
 }
 
 JNIEXPORT void JNICALL
 Java_com_rawpocket_RawNative_nativeClose(JNIEnv*, jobject, jlong h) {
-    if (h > 0) delete reinterpret_cast<rp::Session*>(h);
+    std::lock_guard<std::mutex> lock(gMutex);
+    gSessions.erase(h);
 }
 
 }  // extern "C"
