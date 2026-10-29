@@ -28,12 +28,18 @@ class MainActivity : ComponentActivity() {
         setContent {
             RawPocketTheme {
                 val state by viewModel.state.collectAsStateWithLifecycle()
+                val recents by viewModel.recents.collectAsStateWithLifecycle()
                 val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                    if (uri != null) viewModel.open(uri)
+                    if (uri != null) openUri(uri)
                 }
                 EditorScreen(
                     state = state,
+                    recents = recents,
+                    thumbDir = viewModel.thumbDir,
                     onPick = { picker.launch(arrayOf("*/*")) },
+                    onOpenRecent = { viewModel.open(Uri.parse(it.uri)) },
+                    onRemoveRecent = viewModel::removeRecent,
+                    onHome = viewModel::closePhoto,
                     onParam = viewModel::setParam,
                     onResetParam = viewModel::resetParam,
                     onResetAll = viewModel::resetAll,
@@ -59,7 +65,18 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_VIEW) {
             val uri: Uri = intent.data ?: return
-            viewModel.open(uri)
+            openUri(uri, fromIntent = true)
         }
+    }
+
+    /** Abre la foto y, si el sistema lo permite, conserva el acceso para reabrirla desde Recientes. */
+    private fun openUri(uri: Uri, fromIntent: Boolean = false) {
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (e: SecurityException) {
+            // Algunas apps no ofrecen permiso persistente; la foto se abre igual ahora.
+        } catch (e: UnsupportedOperationException) {
+        }
+        viewModel.open(uri)
     }
 }

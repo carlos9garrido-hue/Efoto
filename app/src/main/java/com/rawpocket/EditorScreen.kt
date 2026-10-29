@@ -1,5 +1,6 @@
 package com.rawpocket
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -64,7 +65,12 @@ import java.util.Locale
 @Composable
 fun EditorScreen(
     state: EditorViewModel.UiState,
+    recents: List<RecentItem>,
+    thumbDir: java.io.File,
     onPick: () -> Unit,
+    onOpenRecent: (RecentItem) -> Unit,
+    onRemoveRecent: (RecentItem) -> Unit,
+    onHome: () -> Unit,
     onParam: (Adjustment, Float) -> Unit,
     onResetParam: (Adjustment) -> Unit,
     onResetAll: () -> Unit,
@@ -73,6 +79,10 @@ fun EditorScreen(
     onExport: () -> Unit,
     onMessageShown: () -> Unit,
 ) {
+    // Atrás en el editor o en un error vuelve al inicio en lugar de cerrar la app.
+    BackHandler(enabled = state.status == EditorViewModel.Status.READY || state.status == EditorViewModel.Status.ERROR) {
+        onHome()
+    }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.message) {
         val m = state.message ?: return@LaunchedEffect
@@ -86,11 +96,11 @@ fun EditorScreen(
             .background(Palette.Background)
     ) {
         when (state.status) {
-            EditorViewModel.Status.EMPTY -> EmptyScreen(onPick)
+            EditorViewModel.Status.EMPTY -> HomeScreen(recents, thumbDir, onPick, onOpenRecent, onRemoveRecent)
             EditorViewModel.Status.LOADING -> LoadingScreen()
-            EditorViewModel.Status.ERROR -> ErrorScreen(state.error.orEmpty(), onPick)
+            EditorViewModel.Status.ERROR -> ErrorScreen(state.error.orEmpty(), onHome)
             EditorViewModel.Status.READY -> ReadyScreen(
-                state, onPick, onParam, onResetParam, onResetAll, crop, onHoldOriginal, onExport,
+                state, onHome, onParam, onResetParam, onResetAll, crop, onHoldOriginal, onExport,
             )
         }
         SnackbarHost(
@@ -104,28 +114,6 @@ fun EditorScreen(
 }
 
 // ------------------------------------------------------------------ pantallas de estado
-
-@Composable
-private fun EmptyScreen(onPick: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("RawPocket", style = MaterialTheme.typography.titleMedium.copy(letterSpacing = 4.sp))
-        Spacer(Modifier.height(12.dp))
-        Text(
-            "Revela tus fotos RAW en el bolsillo.\nCR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2 y más.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(28.dp))
-        Button(onClick = onPick, shape = RoundedCornerShape(12.dp)) { Text("Abrir foto RAW") }
-    }
-}
 
 @Composable
 private fun LoadingScreen() {
@@ -151,7 +139,7 @@ private fun ErrorScreen(message: String, onPick: () -> Unit) {
     ) {
         Text(message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
-        OutlinedButton(onClick = onPick, shape = RoundedCornerShape(12.dp)) { Text("Elegir otra foto") }
+        OutlinedButton(onClick = onPick, shape = RoundedCornerShape(12.dp)) { Text("Volver al inicio") }
     }
 }
 
@@ -160,7 +148,7 @@ private fun ErrorScreen(message: String, onPick: () -> Unit) {
 @Composable
 private fun ReadyScreen(
     state: EditorViewModel.UiState,
-    onPick: () -> Unit,
+    onHome: () -> Unit,
     onParam: (Adjustment, Float) -> Unit,
     onResetParam: (Adjustment) -> Unit,
     onResetAll: () -> Unit,
@@ -172,7 +160,7 @@ private fun ReadyScreen(
     var band by rememberSaveable { mutableStateOf(0) }  // banda de color seleccionada en HSL
 
     Column(Modifier.fillMaxSize()) {
-        TopBar(state, onPick, onExport)
+        TopBar(state, onHome, onExport)
 
         // Foto: mantener pulsada para ver el original.
         Box(
@@ -259,7 +247,7 @@ private fun ReadyScreen(
 }
 
 @Composable
-private fun TopBar(state: EditorViewModel.UiState, onPick: () -> Unit, onExport: () -> Unit) {
+private fun TopBar(state: EditorViewModel.UiState, onHome: () -> Unit, onExport: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -267,7 +255,7 @@ private fun TopBar(state: EditorViewModel.UiState, onPick: () -> Unit, onExport:
             .padding(start = 8.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onPick) { Text("Abrir") }
+        TextButton(onClick = onHome) { Text("Inicio") }
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 state.info?.camera?.ifBlank { state.fileName } ?: state.fileName,

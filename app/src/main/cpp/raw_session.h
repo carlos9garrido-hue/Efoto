@@ -1,4 +1,4 @@
-// Sesión de edición: decodifica un RAW con LibRaw y exporta JPEG. Sin dependencias de Android.
+// Sesión de edición: decodifica un RAW (LibRaw) o un JPEG/PNG (stb_image) y exporta JPEG. Sin dependencias de Android.
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -28,6 +28,9 @@ int openSession(const std::string& path, int previewLongEdge, std::unique_ptr<Se
 // Revela a resolución completa (o limitada a maxEdge px si > 0) y escribe un JPEG.
 int exportJpeg(const Session& s, const Params& p, const std::string& outPath, int quality,
                int maxEdge);
+
+// Miniatura JPEG (lado largo = edge) de la vista previa sin editar, para la pantalla de inicio.
+int exportThumbnail(const Session& s, const std::string& outPath, int edge, int quality);
 
 // Texto legible para un código devuelto por las funciones anteriores.
 std::string errorText(int code);

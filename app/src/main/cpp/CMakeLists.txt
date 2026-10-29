@@ -30,6 +30,7 @@ target_compile_options(raw_static PRIVATE -w)
 add_library(rawpocket SHARED
     rawpocket_jni.cpp
     raw_session.cpp
+    image_input.cpp
     develop.cpp
 )
 target_include_directories(rawpocket PRIVATE

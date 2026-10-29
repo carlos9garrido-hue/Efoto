@@ -16,7 +16,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Abrir un RAW desde el explorador de archivos o la galería -->
+            <!-- Abrir RAW, JPG o PNG desde el explorador de archivos o la galería -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -30,6 +30,8 @@
                 <data android:mimeType="image/x-fuji-raf" />
                 <data android:mimeType="image/x-olympus-orf" />
                 <data android:mimeType="image/x-panasonic-rw2" />
+                <data android:mimeType="image/jpeg" />
+                <data android:mimeType="image/png" />
             </intent-filter>
         </activity>
     </application>

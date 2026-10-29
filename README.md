@@ -1,4 +1,4 @@
-# EFOTO (RawPocket)
+# EFOTO
 
 Revelador de fotos RAW para Android, pensado como un "Lightroom de bolsillo": ediciones no destructivas, lectura de RAW de la mayoría de cámaras (LibRaw) y exportación a JPEG a resolución completa.
 
@@ -11,6 +11,8 @@ Revelador de fotos RAW para Android, pensado como un "Lightroom de bolsillo": ed
 ## Estado (v0.1 · MVP)
 
 Hecho:
+- Abre también JPG/JPEG y PNG (stb_image), con orientación y datos EXIF de cámara.
+- Pantalla de inicio con fotos recientes (miniaturas); nada se abre solo al iniciar.
 - Lectura de RAW con LibRaw (CR2/CR3, NEF, ARW, DNG, RAF, ORF, RW2…), orientación y metadatos EXIF.
 - **Recorte y rotación**: girar 90° (izq./der.), enderezar de −45° a +45° con deslizador y proporciones 1:1, 4:5, 3:2 y 16:9. El recorte se ajusta solo al mayor rectángulo que cabe dentro de la foto enderezada (sin esquinas vacías). La vista previa y la exportación aplican la misma geometría.
 - Revelado: exposición, contraste, luces altas, sombras, blancos, negros, temperatura, matiz, intensidad, saturación.
@@ -19,9 +21,9 @@ Hecho:
 - **Revelado en GPU** (OpenGL ES 3.0): la vista previa es una textura half-float y los sliders solo envían 10 números al shader (`app/src/main/assets/shaders/develop.frag`). Sin copias de píxeles CPU↔GPU al editar.
 - La exportación usa el mismo algoritmo en C++ (CPU) a resolución completa; una prueba automática garantiza que ambos coinciden (diferencia máxima de 1 nivel de 8 bits en 120 combinaciones de los 45 parámetros).
 - Ediciones guardadas como JSON por foto (el RAW nunca se modifica).
-- Exportación JPEG a resolución completa a `Pictures/RawPocket`.
+- Exportación JPEG a resolución completa a `Pictures/Efoto`.
 - Mantener pulsada la foto muestra el original.
-- Abrir RAW desde el explorador de archivos / galería.
+- Abrir RAW, JPG y PNG desde el explorador de archivos / galería.
 
 Pendiente (siguientes fases):
 - Exportación acelerada por GPU (hoy se exporta en CPU multihilo).

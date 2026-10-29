@@ -54,6 +54,12 @@ Java_com_rawpocket_RawNative_nativeInfo(JNIEnv* env, jobject, jlong h) {
     return env->NewStringUTF(reinterpret_cast<rp::Session*>(h)->info.c_str());
 }
 
+JNIEXPORT jint JNICALL
+Java_com_rawpocket_RawNative_nativeThumbnail(JNIEnv* env, jobject, jlong h, jstring jpath, jint edge) {
+    if (h <= 0 || !jpath) return rp::kErrBadArgs;
+    return rp::exportThumbnail(*reinterpret_cast<rp::Session*>(h), toStd(env, jpath), edge, 85);
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_rawpocket_RawNative_nativeErrorText(JNIEnv* env, jobject, jint code) {
     return env->NewStringUTF(rp::errorText(code).c_str());

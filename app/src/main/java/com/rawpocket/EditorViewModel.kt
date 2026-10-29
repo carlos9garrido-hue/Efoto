@@ -49,6 +49,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    private val recentStore = RecentStore(File(app.filesDir, "recents.json"))
+    private val _recents = MutableStateFlow(recentStore.load())
+    val recents: StateFlow<List<RecentItem>> = _recents.asStateFlow()
+    val thumbDir: File = File(app.filesDir, "thumbs").apply { mkdirs() }
+
     /** Protege el acceso al handle nativo (abrir, exportar y cerrar nunca se solapan). */
     private val lock = Mutex()
     private var handle = 0L
@@ -59,18 +64,47 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------------- abrir
 
+    /** Abre una foto. Si es una reciente que ya no se puede leer, se quita de la lista. */
     fun open(uri: Uri) {
         viewModelScope.launch {
             _state.value = UiState(status = Status.LOADING)
-            _state.value = withContext(Dispatchers.Default) { lock.withLock { openLocked(uri) } }
+            val result = withContext(Dispatchers.Default) { lock.withLock { openLocked(uri) } }
+            _state.value = result
+            if (result.status == Status.ERROR) {
+                _recents.value = RecentList.remove(_recents.value, uri.toString())
+                saveRecents()
+            }
         }
+    }
+
+    /** Vuelve a la pantalla de inicio y suelta la foto abierta. */
+    fun closePhoto() {
+        if (_state.value.status == Status.LOADING) return
+        _state.value = UiState()
+        viewModelScope.launch(Dispatchers.Default) { lock.withLock { closeLocked() } }
+    }
+
+    fun removeRecent(item: RecentItem) {
+        val before = _recents.value
+        _recents.value = RecentList.remove(before, item.uri)
+        deleteThumbs(RecentList.dropped(before, _recents.value))
+        saveRecents()
+    }
+
+    private fun saveRecents() {
+        val snapshot = _recents.value
+        viewModelScope.launch(Dispatchers.IO) { runCatching { recentStore.save(snapshot) } }
+    }
+
+    private fun deleteThumbs(items: List<RecentItem>) {
+        viewModelScope.launch(Dispatchers.IO) { items.forEach { it.thumb?.let { t -> File(thumbDir, t).delete() } } }
     }
 
     private fun openLocked(uri: Uri): UiState {
         closeLocked()
         val app = getApplication<Application>()
         val name = displayName(app.contentResolver, uri)
-        val file = File(app.cacheDir, "current.raw")
+        val file = File(app.cacheDir, "current.src")
 
         try {
             val input = app.contentResolver.openInputStream(uri)
@@ -83,7 +117,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val h = RawNative.nativeOpen(file.absolutePath, PREVIEW_LONG_EDGE)
-        if (h <= 0L) return failure("No se pudo abrir el RAW: ${RawNative.nativeErrorText(h.toInt())}")
+        if (h <= 0L) return failure("No se pudo abrir la foto: ${RawNative.nativeErrorText(h.toInt())}")
 
         val w = RawNative.nativePreviewWidth(h)
         val ht = RawNative.nativePreviewHeight(h)
@@ -104,6 +138,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
 
         val key = editKeyFor(name, file.length())
         editKey = key
+        rememberRecent(uri, name, key, h)
         val params = loadEdits(key) ?: EditParams()
 
         return UiState(
@@ -113,6 +148,19 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             params = params,
             photo = GpuPhoto(w, ht, data),
         )
+    }
+
+    /** Añade la foto a los recientes con su miniatura (se llama con el candado tomado). */
+    private fun rememberRecent(uri: Uri, name: String, key: String, h: Long) {
+        val thumbName = "$key.jpg"
+        val ok = RawNative.nativeThumbnail(h, File(thumbDir, thumbName).absolutePath, THUMB_EDGE) == 0
+        val before = _recents.value
+        val after = RecentList.add(before, RecentItem(uri.toString(), name, System.currentTimeMillis(), if (ok) thumbName else null))
+        _recents.value = after
+        // Una miniatura solo se borra si ya ninguna entrada la usa (dos fotos pueden compartir clave).
+        val used = after.mapNotNull { it.thumb }.toSet()
+        deleteThumbs(RecentList.dropped(before, after).filter { it.thumb != null && it.thumb !in used })
+        saveRecents()
     }
 
     private fun failure(message: String) = UiState(status = Status.ERROR, error = message)
@@ -179,7 +227,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------------- exportar
 
-    /** Revela el RAW a resolución completa y guarda un JPEG en Pictures/RawPocket. */
+    /** Revela la foto a resolución completa y guarda un JPEG en Pictures/Efoto. */
     fun export() {
         val s = _state.value
         if (s.status != Status.READY || s.exporting) return
@@ -196,7 +244,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     try {
                         val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, EXPORT_QUALITY, 0)
                         if (rc != 0) return@withLock "No se pudo exportar: ${RawNative.nativeErrorText(rc)}"
-                        saveToGallery(tmp, "${baseName}_RawPocket.jpg")
+                        saveToGallery(tmp, "${baseName}_Efoto.jpg")
                     } catch (e: Exception) {
                         "No se pudo guardar la imagen: ${e.message ?: "error desconocido"}"
                     } finally {
@@ -213,7 +261,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/RawPocket")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Efoto")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
@@ -228,7 +276,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             resolver.delete(uri, null, null)
             throw e
         }
-        return "Guardada en Pictures/RawPocket"
+        return "Guardada en Pictures/Efoto"
     }
 
     // ---------------------------------------------------------------- persistencia de ediciones
@@ -266,6 +314,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val PREVIEW_LONG_EDGE = 2048
         const val EXPORT_QUALITY = 95
+        const val THUMB_EDGE = 320
     }
 }
 

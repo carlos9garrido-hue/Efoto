@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <thread>
 
+#include "image_input.h"
 #include "libraw/libraw.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -14,9 +15,12 @@ namespace rp {
 
 namespace {
 
-// Imagen decodificada (RGB lineal 16 bits). Se libera con LibRaw::dcraw_clear_mem.
+// Imagen decodificada (RGB lineal 16 bits): de LibRaw (se libera con dcraw_clear_mem) o de un
+// JPEG/PNG (vector propio).
 struct Decoded {
     libraw_processed_image_t* img = nullptr;
+    std::vector<uint16_t> own;
+    int ow = 0, oh = 0;
     std::string info;
     Decoded() = default;
     Decoded(const Decoded&) = delete;
@@ -24,13 +28,36 @@ struct Decoded {
     ~Decoded() {
         if (img) LibRaw::dcraw_clear_mem(img);
     }
-    const uint16_t* data() const { return reinterpret_cast<const uint16_t*>(img->data); }
-    int width() const { return img->width; }
-    int height() const { return img->height; }
+    const uint16_t* data() const {
+        return img ? reinterpret_cast<const uint16_t*>(img->data) : own.data();
+    }
+    int width() const { return img ? img->width : ow; }
+    int height() const { return img ? img->height : oh; }
 };
+
+bool isJpegOrPng(const char* path) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return false;
+    uint8_t head[8] = {0};
+    size_t n = std::fread(head, 1, sizeof(head), f);
+    std::fclose(f);
+    return looksLikeJpegOrPng(head, n);
+}
+
+int decodeStill(const char* path, Decoded& out) {
+    ExifInfo ex;
+    int rc = decodeImageFile(path, out.own, out.ow, out.oh, ex);
+    if (rc != 0) return rc;
+    char buf[512];
+    std::snprintf(buf, sizeof(buf), "%s|%s|%.0f|%.6f|%.2f|%.1f|%d|%d", ex.make.c_str(),
+                  ex.model.c_str(), ex.iso, ex.shutter, ex.aperture, ex.focal, out.ow, out.oh);
+    out.info = buf;
+    return 0;
+}
 
 // half = true usa media resolución (rápido, para la vista previa).
 int decode(const char* path, bool half, Decoded& out) {
+    if (isJpegOrPng(path)) return decodeStill(path, out);
     LibRaw lr;
     auto& P = lr.imgdata.params;
     P.use_camera_wb = 1;  // el balance de la cámara es el punto de partida
@@ -146,8 +173,25 @@ int exportJpeg(const Session& s, const Params& p, const std::string& outPath, in
     return ok ? 0 : kErrWrite;
 }
 
+int exportThumbnail(const Session& s, const std::string& outPath, int edge, int quality) {
+    if (s.preview.empty() || edge <= 0) return kErrBadArgs;
+    std::vector<uint16_t> reduced;
+    int rw = 0, rh = 0;
+    int step = std::max(1, (std::max(s.pw, s.ph) + edge - 1) / edge);
+    boxDownsample16(s.preview.data(), s.pw, s.ph, step, reduced, rw, rh);
+    std::vector<uint8_t> rgb(static_cast<size_t>(rw) * rh * 3);
+    developToRgb8(reduced.data(), rw, rh, Params(), rgb.data(), 1);
+    FILE* f = std::fopen(outPath.c_str(), "wb");
+    if (!f) return kErrWrite;
+    int ok = stbi_write_jpg_to_func(writeToFile, f, rw, rh, 3, rgb.data(), std::max(1, std::min(100, quality)));
+    std::fclose(f);
+    return ok ? 0 : kErrWrite;
+}
+
 std::string errorText(int code) {
     switch (code) {
+        case kErrImageDecode: return "No se pudo leer la imagen (¿JPG/PNG dañado?)";
+        case kErrImageRead: return "No se pudo leer el archivo";
         case kErrBadArgs: return "Argumentos inválidos";
         case kErrUnsupportedImage: return "Formato de imagen no soportado";
         case kErrBitmap: return "No se pudo acceder al bitmap";

@@ -27,9 +27,14 @@ target_compile_options(raw_static PRIVATE -w)
 target_link_libraries(raw_static ZLIB::ZLIB Threads::Threads)
 
 add_executable(test_host
-    test_host.cpp ${CPP}/develop.cpp ${CPP}/raw_session.cpp)
+    test_host.cpp ${CPP}/develop.cpp ${CPP}/raw_session.cpp ${CPP}/image_input.cpp)
 target_include_directories(test_host PRIVATE ${CPP} ${CPP}/third_party/stb)
 target_link_libraries(test_host raw_static Threads::Threads)
+
+add_executable(test_image
+    test_image.cpp ${CPP}/develop.cpp ${CPP}/raw_session.cpp ${CPP}/image_input.cpp)
+target_include_directories(test_image PRIVATE ${CPP} ${CPP}/third_party/stb)
+target_link_libraries(test_image raw_static Threads::Threads)
 
 # Volcador del motor CPU para la prueba de paridad CPU/GPU (native-tests/gpu/parity.js).
 add_executable(dump_cpu dump_cpu.cpp ${CPP}/develop.cpp)
@@ -47,3 +52,5 @@ add_test(NAME make_dng_o6
 add_test(NAME pipeline
     COMMAND test_host ${TEST_DIR}/test.dng ${TEST_DIR}/test_o6.dng ${TEST_DIR})
 set_tests_properties(pipeline PROPERTIES DEPENDS "make_dng_normal;make_dng_o6")
+
+add_test(NAME imagenes_jpg_png COMMAND test_image ${CMAKE_BINARY_DIR})

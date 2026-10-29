@@ -12,7 +12,7 @@ object RawNative {
         System.loadLibrary("rawpocket")
     }
 
-    /** Abre un RAW y prepara la vista previa. Devuelve un handle (> 0) o un código de error (< 0). */
+    /** Abre un RAW, JPG o PNG y prepara la vista previa. Devuelve un handle (> 0) o un código de error (< 0). */
     external fun nativeOpen(path: String, previewLongEdge: Int): Long
 
     external fun nativePreviewWidth(handle: Long): Int
@@ -20,6 +20,9 @@ object RawNative {
 
     /** "marca|modelo|iso|obturador|apertura|focal|ancho|alto" */
     external fun nativeInfo(handle: Long): String
+
+    /** Guarda una miniatura JPEG (lado largo [edge]) de la foto sin editar. Devuelve 0 o un error. */
+    external fun nativeThumbnail(handle: Long, outPath: String, edge: Int): Int
 
     external fun nativeErrorText(code: Int): String
 
