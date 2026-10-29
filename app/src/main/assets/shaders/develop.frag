@@ -11,7 +11,11 @@ uniform sampler2D uTex;      // RGB lineal (sRGB primarios), 1.0 = blanco
 //         temperatura, matiz, intensidad, saturación
 //   10-14 curva tonal: desplazamiento en x = 0, .25, .5, .75, 1
 //   15-38 HSL: 8 bandas (rojo, naranja, amarillo, verde, aqua, azul, púrpura, magenta) x (tono, sat., lum.)
-uniform float uParams[39];
+//   39-44 geometría: enderezado (grados), giros de 90°, recorte izquierda/arriba/derecha/abajo (0..1)
+uniform float uParams[45];
+// (cos, sin) del ángulo de enderezado, calculados fuera del shader: sin() y cos() en GPU solo
+// garantizan un error de 2^-11, que desplazaría el muestreo varias décimas de píxel.
+uniform vec2 uRot;
 
 in vec2 vUv;
 out vec4 outColor;
@@ -69,13 +73,61 @@ vec3 applyHsl(vec3 c) {
     return v * (1.0 - s + s * q);
 }
 
+// Geometría: posición de la imagen final (0..1, y hacia abajo) -> posición en la foto original (0..1).
+// Idéntica a Geo::sourceUv en develop.cpp: primero se gira (90°), luego se endereza sobre ese
+// marco y por último se recorta.
+vec2 sourceUv(vec2 uv) {
+    float ca = uRot.x;
+    float sa = uRot.y;
+    int k = int(floor(uParams[40] + 0.5)) & 3;
+    float l = clamp(uParams[41], 0.0, 1.0), t = clamp(uParams[42], 0.0, 1.0);
+    float r = clamp(uParams[43], 0.0, 1.0), b = clamp(uParams[44], 0.0, 1.0);
+    vec2 src = vec2(textureSize(uTex, 0));
+    float wA = ((k & 1) == 1) ? src.y : src.x;
+    float hA = ((k & 1) == 1) ? src.x : src.y;
+
+    float ax = l + (1.0 - r - l) * uv.x;
+    float ay = t + (1.0 - b - t) * uv.y;
+    float cx = 0.5 * wA, cy = 0.5 * hA;
+    float dx = ax * wA - cx, dy = ay * hA - cy;
+    float sx = (cx + ca * dx + sa * dy) / wA;
+    float sy = (cy - sa * dx + ca * dy) / hA;
+    if (k == 1) return vec2(sy, 1.0 - sx);
+    if (k == 2) return vec2(1.0 - sx, 1.0 - sy);
+    if (k == 3) return vec2(1.0 - sy, sx);
+    return vec2(sx, sy);
+}
+
+// Interpolación bilineal hecha a mano (4 texelFetch, bordes repetidos). El filtro de textura del
+// hardware usa pesos de precisión limitada que varían entre GPUs; así la vista previa es
+// idéntica en cualquier dispositivo y coincide con developGeometry() de C++ (la exportación).
+vec3 sampleBilinear(vec2 uv) {
+    ivec2 sz = textureSize(uTex, 0);
+    vec2 f = uv * vec2(sz) - 0.5;
+    vec2 fl = floor(f);
+    vec2 t = f - fl;
+    // Dentro de 1e-4 px del centro de un texel se ajusta a él: el redondeo de coma flotante no
+    // debe mezclar un vecino brillante en un negro puro (el motor multiplica los negros por >100).
+    t.x = t.x < 1e-4 ? 0.0 : (t.x > 0.9999 ? 1.0 : t.x);
+    t.y = t.y < 1e-4 ? 0.0 : (t.y > 0.9999 ? 1.0 : t.y);
+    ivec2 p0 = clamp(ivec2(fl), ivec2(0), sz - 1);
+    ivec2 p1 = clamp(ivec2(fl) + 1, ivec2(0), sz - 1);
+    vec3 a = texelFetch(uTex, ivec2(p0.x, p0.y), 0).rgb;
+    vec3 b = texelFetch(uTex, ivec2(p1.x, p0.y), 0).rgb;
+    vec3 c = texelFetch(uTex, ivec2(p0.x, p1.y), 0).rgb;
+    vec3 e = texelFetch(uTex, ivec2(p1.x, p1.y), 0).rgb;
+    vec3 top = a + (b - a) * t.x;
+    vec3 bottom = c + (e - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
 void main() {
     float exposure = uParams[0], contrast = uParams[1], highlights = uParams[2];
     float shadows = uParams[3], whites = uParams[4], blacks = uParams[5];
     float temperature = uParams[6], tint = uParams[7];
     float vibrance = uParams[8], saturation = uParams[9];
 
-    vec3 c = texture(uTex, vUv).rgb;
+    vec3 c = sampleBilinear(sourceUv(vUv));
 
     // Exposición y balance de blancos relativo al de la cámara.
     float ev = exp2(exposure);

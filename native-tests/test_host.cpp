@@ -15,11 +15,182 @@ static int failures = 0;
         else { std::printf("  ok:   %s\n", msg); }                    \
     } while (0)
 
+// Lee el tamaño de un JPEG (marcador SOF0/SOF1/SOF2).
+static bool jpegSize(const std::string& path, int& w, int& h) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    std::vector<uint8_t> d;
+    uint8_t buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) d.insert(d.end(), buf, buf + n);
+    std::fclose(f);
+    for (size_t i = 2; i + 9 < d.size();) {
+        if (d[i] != 0xFF) { ++i; continue; }
+        uint8_t m = d[i + 1];
+        if (m == 0xC0 || m == 0xC1 || m == 0xC2) {
+            h = (d[i + 5] << 8) | d[i + 6];
+            w = (d[i + 7] << 8) | d[i + 8];
+            return true;
+        }
+        if (m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+        i += 2 + ((d[i + 2] << 8) | d[i + 3]);
+    }
+    return false;
+}
+
 static float luma(const uint8_t* p) { return 0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2]; }
 
 int main(int argc, char** argv) {
     if (argc < 4) { std::printf("uso: %s a.dng a_o6.dng outdir\n", argv[0]); return 2; }
     std::string a = argv[1], a6 = argv[2], outdir = argv[3];
+
+    std::printf("[geometría] giro, enderezado y recorte\n");
+    {
+        // Imagen 4x2 con 8 colores distintos (RGB16 lineal).
+        const int W = 4, H = 2;
+        std::vector<uint16_t> src(W * H * 3);
+        for (int n = 0; n < W * H; ++n) {
+            src[n * 3 + 0] = static_cast<uint16_t>(4000 + 7000 * n);
+            src[n * 3 + 1] = static_cast<uint16_t>(60000 - 6000 * n);
+            src[n * 3 + 2] = static_cast<uint16_t>(2000 + 3000 * ((n * 5) % 8));
+        }
+        auto geo = [&](const std::vector<uint16_t>& s, int w, int h, const rp::Params& p,
+                       std::vector<uint8_t>& out, int& ow, int& oh) {
+            rp::outputSize(w, h, p, ow, oh);
+            out.assign(static_cast<size_t>(ow) * oh * 3, 0);
+            rp::developGeometry(s.data(), w, h, p, out.data(), ow, oh, 1);
+        };
+        auto plain = [&](const std::vector<uint16_t>& s, int w, int h) {
+            std::vector<uint8_t> out(static_cast<size_t>(w) * h * 3);
+            rp::developToRgb8(s.data(), w, h, rp::Params(), out.data(), 1);
+            return out;
+        };
+        // Reordena píxeles: dst(i, j) = src(sx(i,j), sy(i,j)).
+        auto remap = [&](int ow, int oh, auto fn) {
+            std::vector<uint16_t> d(static_cast<size_t>(ow) * oh * 3);
+            for (int j = 0; j < oh; ++j)
+                for (int i = 0; i < ow; ++i) {
+                    int sx, sy;
+                    fn(i, j, sx, sy);
+                    for (int c = 0; c < 3; ++c) d[(static_cast<size_t>(j) * ow + i) * 3 + c] = src[(sy * W + sx) * 3 + c];
+                }
+            return d;
+        };
+
+        int ow, oh;
+        std::vector<uint8_t> out;
+        rp::Params p;
+        rp::outputSize(W, H, p, ow, oh);
+        CHECK(ow == 4 && oh == 2, "tamaño sin cambios");
+        p.rotate90 = 1;
+        rp::outputSize(W, H, p, ow, oh);
+        CHECK(ow == 2 && oh == 4, "girar 90° intercambia ancho y alto");
+        p = rp::Params(); p.cropL = 0.5f;
+        rp::outputSize(W, H, p, ow, oh);
+        CHECK(ow == 2 && oh == 2, "recorte del 50% por la izquierda: 2x2");
+        p = rp::Params(); p.angle = 20.f;
+        rp::outputSize(W, H, p, ow, oh);
+        CHECK(ow == 4 && oh == 2, "enderezar no cambia el tamaño del marco");
+
+        // Giros: la foto gira en sentido horario (k=1: la parte superior pasa a la derecha).
+        p = rp::Params(); p.rotate90 = 1;
+        geo(src, W, H, p, out, ow, oh);
+        auto r1 = remap(2, 4, [&](int i, int j, int& sx, int& sy) { sx = j; sy = H - 1 - i; });
+        CHECK(out == plain(r1, 2, 4), "giro 90° horario: píxeles en su sitio");
+        p.rotate90 = 2;
+        geo(src, W, H, p, out, ow, oh);
+        auto r2 = remap(4, 2, [&](int i, int j, int& sx, int& sy) { sx = W - 1 - i; sy = H - 1 - j; });
+        CHECK(out == plain(r2, 4, 2), "giro 180°: píxeles en su sitio");
+        p.rotate90 = 3;
+        geo(src, W, H, p, out, ow, oh);
+        auto r3 = remap(2, 4, [&](int i, int j, int& sx, int& sy) { sx = W - 1 - j; sy = i; });
+        CHECK(out == plain(r3, 2, 4), "giro 270° (90° antihorario): píxeles en su sitio");
+        p.rotate90 = 4;  // da la vuelta completa
+        geo(src, W, H, p, out, ow, oh);
+        CHECK(out == plain(src, W, H), "4 giros de 90° = sin giro");
+
+        // Recorte: mitad derecha.
+        p = rp::Params(); p.cropL = 0.5f;
+        geo(src, W, H, p, out, ow, oh);
+        auto rc = remap(2, 2, [&](int i, int j, int& sx, int& sy) { sx = 2 + i; sy = j; });
+        CHECK(out == plain(rc, 2, 2), "recorte izquierdo 50%: queda la mitad derecha");
+        p = rp::Params(); p.cropB = 0.5f;
+        geo(src, W, H, p, out, ow, oh);
+        auto rb = remap(4, 1, [&](int i, int j, int& sx, int& sy) { sx = i; sy = 0; });
+        CHECK(ow == 4 && oh == 1 && out == plain(rb, 4, 1), "recorte inferior 50%: queda la fila superior");
+
+        // Sin geometría el resultado es el del camino rápido.
+        p = rp::Params();
+        geo(src, W, H, p, out, ow, oh);
+        CHECK(out == plain(src, W, H), "geometría neutra = revelado normal (muestreo exacto en el centro del píxel)");
+
+        // Sentido del enderezado: con +90° la foto gira en sentido horario (centro-derecha -> centro-abajo).
+        const int N = 9;
+        std::vector<uint16_t> dot(N * N * 3, 6000);
+        for (int c = 0; c < 3; ++c) dot[(4 * N + 8) * 3 + c] = 60000;  // píxel brillante a la derecha
+        auto brightest = [&](const std::vector<uint8_t>& o) {
+            int best = 0, bi = 0;
+            for (int i = 0; i < N * N; ++i)
+                if (o[i * 3] > best) { best = o[i * 3]; bi = i; }
+            return std::pair<int, int>(bi % N, bi / N);
+        };
+        p = rp::Params(); p.angle = 90.f;
+        geo(dot, N, N, p, out, ow, oh);
+        auto bp = brightest(out);
+        CHECK(bp.first == 4 && bp.second == 8, "ángulo +90°: el punto de la derecha baja (giro horario)");
+        p.angle = -90.f;
+        geo(dot, N, N, p, out, ow, oh);
+        bp = brightest(out);
+        CHECK(bp.first == 4 && bp.second == 0, "ángulo -90°: el punto de la derecha sube (giro antihorario)");
+    }
+
+    std::printf("[geometría] recorte automático de la app (valores calculados por EditParams.kt)\n");
+    {
+        // Foto gris con 1 px de borde rojo: si el recorte dejara esquinas vacías, el motor repetiría
+        // el borde (rojo) y aparecerían muchos píxeles rojos en la imagen final.
+        struct Case { int w, h; float deg, l, t, r, b; };
+        const Case cases[] = {
+            {128, 96, 20.f, 0.1418f, 0.1418f, 0.1418f, 0.1418f},   // Original
+            {128, 96, 20.f, 0.2074f, 0.1099f, 0.2074f, 0.1099f},   // 1:1
+            {96, 128, -33.f, 0.1805f, 0.1805f, 0.1805f, 0.1805f},  // Original, vertical
+            {128, 96, 41.f, 0.153f, 0.2397f, 0.153f, 0.2397f},     // 16:9
+            {128, 96, -7.f, 0.0344f, 0.0861f, 0.0344f, 0.0861f},   // 3:2
+        };
+        auto redCount = [](const Case& c, bool withCrop) {
+            std::vector<uint16_t> img(static_cast<size_t>(c.w) * c.h * 3);
+            for (int y = 0; y < c.h; ++y)
+                for (int x = 0; x < c.w; ++x) {
+                    bool border = x == 0 || y == 0 || x == c.w - 1 || y == c.h - 1;
+                    uint16_t* px = &img[(static_cast<size_t>(y) * c.w + x) * 3];
+                    px[0] = border ? 52000 : 13000;
+                    px[1] = border ? 1300 : 13000;
+                    px[2] = border ? 1300 : 13000;
+                }
+            rp::Params p;
+            p.angle = c.deg;
+            if (withCrop) { p.cropL = c.l; p.cropT = c.t; p.cropR = c.r; p.cropB = c.b; }
+            int ow, oh;
+            rp::outputSize(c.w, c.h, p, ow, oh);
+            std::vector<uint8_t> out(static_cast<size_t>(ow) * oh * 3);
+            rp::developGeometry(img.data(), c.w, c.h, p, out.data(), ow, oh, 1);
+            int red = 0;
+            for (int i = 0; i < ow * oh; ++i)
+                if (out[i * 3] - out[i * 3 + 1] > 40) ++red;
+            return red;
+        };
+        bool allClean = true, allDirtyWithout = true;
+        int worstClean = 0, leastDirty = 1 << 30;
+        for (const Case& c : cases) {
+            int clean = redCount(c, true), dirty = redCount(c, false);
+            worstClean = std::max(worstClean, clean);
+            leastDirty = std::min(leastDirty, dirty);
+            if (clean > 40) allClean = false;
+            if (dirty < 150) allDirtyWithout = false;
+        }
+        std::printf("        (píxeles de borde: con recorte automático <= %d; sin recorte >= %d)\n", worstClean, leastDirty);
+        CHECK(allClean, "con el recorte automático no se ve el borde de la foto (sin esquinas vacías)");
+        CHECK(allDirtyWithout, "sin recorte, enderezar sí deja el borde repetido (la prueba puede fallar)");
+    }
 
     std::printf("[curva y HSL]\n");
     {
@@ -206,6 +377,27 @@ int main(int argc, char** argv) {
     uint8_t sig[3] = {0, 0, 0};
     if (f) { if (std::fread(sig, 1, 3, f) != 3) {} std::fclose(f); }
     CHECK(sig[0] == 0xFF && sig[1] == 0xD8 && sig[2] == 0xFF, "el archivo es un JPEG válido (firma SOI)");
+
+    // Exportación con geometría: el JPEG sale con el tamaño girado/recortado.
+    {
+        int fw = 0, fh = 0;
+        bool ok = jpegSize(out1, fw, fh);
+        CHECK(ok && fw > 0 && fh > 0, "se puede leer el tamaño del JPEG exportado");
+        auto exportSize = [&](const rp::Params& p, int& w, int& h) {
+            std::string path = outdir + "/export_geo.jpg";
+            int rc2 = rp::exportJpeg(*s, p, path, 90, 0);
+            return rc2 == 0 && jpegSize(path, w, h);
+        };
+        int w = 0, h = 0;
+        rp::Params g; g.rotate90 = 1;
+        CHECK(exportSize(g, w, h) && w == fh && h == fw, "exportar con giro de 90°: ancho y alto intercambiados");
+        g = rp::Params(); g.cropL = 0.25f; g.cropR = 0.25f;
+        CHECK(exportSize(g, w, h) && std::abs(w - fw / 2) <= 1 && h == fh, "exportar con recorte lateral del 50%: mitad de ancho");
+        g = rp::Params(); g.rotate90 = 3; g.angle = 10.f; g.cropL = g.cropR = g.cropT = g.cropB = 0.1f; g.exposure = 0.3f;
+        CHECK(exportSize(g, w, h) && std::abs(w - static_cast<int>(std::lround(0.8 * fh))) <= 1 &&
+                  std::abs(h - static_cast<int>(std::lround(0.8 * fw))) <= 1,
+              "exportar con giro + enderezado + recorte + tono: tamaño esperado");
+    }
 
     // Vista previa revelada con la edición, para inspección visual.
     {

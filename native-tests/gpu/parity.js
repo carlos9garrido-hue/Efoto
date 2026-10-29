@@ -12,22 +12,24 @@ const [dumpCpu, work] = process.argv.slice(2);
 if (!dumpCpu || !work) { console.error('uso: node parity.js <dump_cpu> <workdir>'); process.exit(2); }
 fs.mkdirSync(work, { recursive: true });
 
-const W = 128, H = 128;
+const W = 128, H = 96;  // fuente (la imagen final puede tener otro tamaño)
 const SHADERS = path.resolve(__dirname, '../../app/src/main/assets/shaders');
 const vert = fs.readFileSync(path.join(SHADERS, 'develop.vert'), 'utf8');
 const frag = fs.readFileSync(path.join(SHADERS, 'develop.frag'), 'utf8');
 
-const inFile = path.join(work, 'in.rgb16');
-execFileSync('python3', [path.join(__dirname, 'gen_image.py'), inFile]);
+// PARITY_IMAGE=<archivo.rgb16 de 128x96> usa otra imagen de entrada (por ejemplo, una suave).
+const inFile = process.env.PARITY_IMAGE || path.join(work, 'in.rgb16');
+if (!process.env.PARITY_IMAGE) execFileSync('python3', [path.join(__dirname, 'gen_image.py'), inFile]);
 
-// Orden de los 39 parámetros (igual que Params en develop.h)
+// Orden de los 45 parámetros (igual que Params en develop.h)
 const names = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temperature', 'tint', 'vibrance', 'saturation'];
 for (let i = 0; i < 5; i++) names.push(`curve${i}`);
 const bands = ['rojo', 'naranja', 'amarillo', 'verde', 'aqua', 'azul', 'purpura', 'magenta'];
 for (const b of bands) for (const k of ['tono', 'sat', 'lum']) names.push(`${b}-${k}`);
-const N = names.length;  // 39
+names.push('angle', 'rotate90', 'cropL', 'cropT', 'cropR', 'cropB');  // geometría (39-44)
+const N = names.length;  // 45
 
-const amp = (i) => (i === 0 ? 1.5 : i >= 10 && i < 15 ? 0.2 : 0.7);
+const amp = (i) => (i === 0 ? 1.5 : i >= 10 && i < 15 ? 0.2 : i === 39 ? 20 : i === 40 ? 1 : i >= 41 ? 0.3 : 0.7);
 const cases = [{ name: 'neutro', p: new Array(N).fill(0) }];
 names.forEach((n, i) => {
   for (const sign of [1, -1]) {
@@ -36,13 +38,22 @@ names.forEach((n, i) => {
     cases.push({ name: `${n} ${sign > 0 ? '+' : '-'}`, p });
   }
 });
-const maxAll = names.map((_, i) => (i === 0 ? 2 : i >= 10 && i < 15 ? 0.25 : 1));
+const maxAll = names.map((_, i) => (i === 0 ? 2 : i >= 10 && i < 15 ? 0.25 : i === 39 ? 30 : i === 40 ? 3 : i >= 41 ? 0.4 : 1));
 cases.push({ name: 'todo al máximo', p: maxAll });
 cases.push({ name: 'todo al mínimo', p: maxAll.map((v) => -v) });
+// Geometría con nombre propio (giros, enderezado con recorte, combinada con tono y color)
+const geo = (o) => { const p = new Array(N).fill(0); Object.entries(o).forEach(([k, v]) => { p[names.indexOf(k)] = v; }); return p; };
+cases.push({ name: 'giro 90', p: geo({ rotate90: 1 }) });
+cases.push({ name: 'giro 180', p: geo({ rotate90: 2 }) });
+cases.push({ name: 'giro 270', p: geo({ rotate90: 3 }) });
+cases.push({ name: 'enderezar +12 recorte', p: geo({ angle: 12, cropL: 0.12, cropR: 0.12, cropT: 0.15, cropB: 0.15 }) });
+cases.push({ name: 'enderezar -25 recorte', p: geo({ angle: -25, cropL: 0.2, cropR: 0.1, cropT: 0.1, cropB: 0.25 }) });
+cases.push({ name: 'giro 90 + enderezar', p: geo({ rotate90: 1, angle: 7, cropL: 0.1, cropT: 0.1, cropR: 0.1, cropB: 0.1 }) });
+cases.push({ name: 'giro 270 + tono/HSL', p: geo({ rotate90: 3, angle: -15, cropB: 0.2, exposure: 0.5, contrast: 0.3, 'rojo-sat': -0.6, 'azul-tono': 0.5, curve2: 0.15 }) });
 // Combinaciones pseudoaleatorias reproducibles
 let seed = 42;
 const rnd = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296) * 2 - 1;
-for (let k = 0; k < 12; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.map((_, i) => rnd() * maxAll[i]) });
+for (let k = 0; k < 20; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.map((_, i) => rnd() * maxAll[i]) });
 
 (async () => {
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
@@ -74,32 +85,39 @@ for (let k = 0; k < 12; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.m
   }, { vert, frag, W, H });
 
   let worst = 0, failed = 0;
-  console.log(`${'caso'.padEnd(18)} ${'máx'.padStart(4)} ${'media'.padStart(7)} ${'>1'.padStart(6)}`);
+  console.log(`${'caso'.padEnd(22)} ${'máx'.padStart(4)} ${'media'.padStart(7)} ${'>1'.padStart(6)}`);
   for (const c of cases) {
     const rgb8 = path.join(work, 'cpu.rgb8'), half = path.join(work, 'in.half');
-    execFileSync(dumpCpu, [inFile, W, H, rgb8, half, ...c.p].map(String));
+    const dims = execFileSync(dumpCpu, [inFile, W, H, rgb8, half, ...c.p].map(String)).toString().trim().split(/\s+/).map(Number);
+    const [OW, OH] = dims;
     const cpu = fs.readFileSync(rgb8);
     const halfB64 = fs.readFileSync(half).toString('base64');
 
-    const gpu = await page.evaluate(({ halfB64, p }) => {
+    const gpu = await page.evaluate(({ halfB64, p, OW, OH }) => {
       const { gl, prog, W, H } = window.__gl;
+      const canvas = document.getElementById('c');
+      canvas.width = OW; canvas.height = OH;  // lienzo = tamaño de la imagen final
       const bin = Uint8Array.from(atob(halfB64), (ch) => ch.charCodeAt(0));
       const data = new Uint16Array(bin.buffer);
       // Mismos bits half-float que sube la app (internalformat RGBA16F, tipo HALF_FLOAT).
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, W, H, 0, gl.RGBA, gl.HALF_FLOAT, data);
       gl.uniform1fv(gl.getUniformLocation(prog, 'uParams'), new Float32Array(p));
-      gl.viewport(0, 0, W, H);
+      // Igual que la app: cos/sin del enderezado se calculan fuera del shader.
+      const rad = (p[39] * Math.PI) / 180;
+      gl.uniform2f(gl.getUniformLocation(prog, 'uRot'), Math.cos(rad), Math.sin(rad));
+      gl.viewport(0, 0, OW, OH);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      const px = new Uint8Array(W * H * 4);
-      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      const px = new Uint8Array(OW * OH * 4);
+      gl.readPixels(0, 0, OW, OH, gl.RGBA, gl.UNSIGNED_BYTE, px);
       // readPixels es de abajo a arriba: se voltea y se descarta alfa.
-      const out = new Uint8Array(W * H * 3);
-      for (let y = 0; y < H; y++)
-        for (let x = 0; x < W; x++)
-          for (let k = 0; k < 3; k++) out[(y * W + x) * 3 + k] = px[((H - 1 - y) * W + x) * 4 + k];
+      const out = new Uint8Array(OW * OH * 3);
+      for (let y = 0; y < OH; y++)
+        for (let x = 0; x < OW; x++)
+          for (let k = 0; k < 3; k++) out[(y * OW + x) * 3 + k] = px[((OH - 1 - y) * OW + x) * 4 + k];
       return Array.from(out);
-    }, { halfB64, p: c.p });
+    }, { halfB64, p: c.p, OW, OH });
 
+    if (cpu.length !== gpu.length) { console.log(`${c.name.padEnd(22)} tamaño distinto: CPU ${cpu.length} vs GPU ${gpu.length}`); failed++; continue; }
     let max = 0, sum = 0, over = 0;
     for (let i = 0; i < cpu.length; i++) {
       const d = Math.abs(cpu[i] - gpu[i]);
@@ -107,11 +125,20 @@ for (let k = 0; k < 12; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.m
       if (d > 1) over++;
       sum += d;
     }
+    if (process.env.DEBUG_CASE === c.name) {  // muestra los píxeles con más diferencia
+      const rows = [];
+      for (let i = 0; i < cpu.length; i += 3) {
+        const d = Math.max(Math.abs(cpu[i] - gpu[i]), Math.abs(cpu[i + 1] - gpu[i + 1]), Math.abs(cpu[i + 2] - gpu[i + 2]));
+        rows.push({ d, x: (i / 3) % OW, y: Math.floor(i / 3 / OW), cpu: [cpu[i], cpu[i + 1], cpu[i + 2]], gpu: [gpu[i], gpu[i + 1], gpu[i + 2]] });
+      }
+      rows.sort((a, b) => b.d - a.d);
+      console.log('peores píxeles:', JSON.stringify(rows.slice(0, 6)));
+    }
     worst = Math.max(worst, max);
     // Tolerancia: ±1 nivel de 8 bits (redondeo, half-float y pow/exp de la GPU).
     const ok = max <= 1;
     if (!ok) failed++;
-    console.log(`${c.name.padEnd(18)} ${String(max).padStart(4)} ${(sum / cpu.length).toFixed(3).padStart(7)} ${String(over).padStart(6)}  ${ok ? 'ok' : 'FALLA'}`);
+    console.log(`${c.name.padEnd(22)} ${String(max).padStart(4)} ${(sum / cpu.length).toFixed(3).padStart(7)} ${String(over).padStart(6)}  ${ok ? 'ok' : 'FALLA'}`);
   }
   await browser.close();
   console.log(`\nDiferencia máxima: ${worst} niveles de 8 bits; ${failed} casos fuera de tolerancia`);

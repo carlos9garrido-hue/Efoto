@@ -4,7 +4,7 @@ Mezcla rampas, colores saturados, extremos (negro, blanco) y valores aleatorios 
 logarítmica, para cubrir sombras profundas y altas luces."""
 import colorsys, random, struct, sys
 
-W, H = 128, 128
+W, H = 128, 96  # no cuadrada, para probar giros de 90°
 
 def main(path):
     rnd = random.Random(1234)

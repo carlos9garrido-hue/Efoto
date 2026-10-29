@@ -125,8 +125,17 @@ int exportJpeg(const Session& s, const Params& p, const std::string& outPath, in
             w = rw;
             h = rh;
         }
-        rgb.resize(static_cast<size_t>(w) * h * 3);
-        developToRgb8(src, w, h, p, rgb.data(), workerThreads());
+        if (p.hasGeometry()) {
+            int ow = 0, oh = 0;
+            outputSize(w, h, p, ow, oh);
+            rgb.resize(static_cast<size_t>(ow) * oh * 3);
+            developGeometry(src, w, h, p, rgb.data(), ow, oh, workerThreads());
+            w = ow;
+            h = oh;
+        } else {
+            rgb.resize(static_cast<size_t>(w) * h * 3);
+            developToRgb8(src, w, h, p, rgb.data(), workerThreads());
+        }
     }  // la imagen de 16 bits se libera antes de codificar
 
     FILE* f = std::fopen(outPath.c_str(), "wb");

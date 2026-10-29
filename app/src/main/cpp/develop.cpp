@@ -73,6 +73,13 @@ Params Params::fromArray(const float* a) {
     p.saturation = a[9];
     for (int i = 0; i < Params::kCurvePoints; ++i) p.curve[i] = a[10 + i];
     for (int i = 0; i < Params::kHslBands * 3; ++i) p.hsl[i] = a[10 + Params::kCurvePoints + i];
+    const float* g = a + Params::kGeomStart;
+    p.angle = g[0];
+    p.rotate90 = g[1];
+    p.cropL = g[2];
+    p.cropT = g[3];
+    p.cropR = g[4];
+    p.cropB = g[5];
     return p;
 }
 
@@ -310,6 +317,96 @@ void developToRgba(const uint16_t* src, int w, int h, const Params& p,
             for (int x = 0; x < w; ++x, s += 3, d += 4) {
                 dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, d);
                 d[3] = 255;
+            }
+        }
+    });
+}
+
+namespace {
+
+// Geometría resuelta: la misma matemática que sourceUv() en develop.frag.
+struct Geo {
+    float ca, sa;       // coseno y seno del enderezado
+    int k;              // giros de 90° (0..3)
+    float l, t, r, b;   // recorte
+    float wA, hA;       // tamaño del marco girado (px)
+    float W, H;         // tamaño de la fuente (px)
+
+    Geo(int srcW, int srcH, const Params& p) {
+        constexpr float kDegToRad = 0.017453292519943295f;
+        ca = std::cos(p.angle * kDegToRad);
+        sa = std::sin(p.angle * kDegToRad);
+        k = static_cast<int>(std::floor(p.rotate90 + 0.5f)) & 3;
+        l = clamp01(p.cropL);
+        t = clamp01(p.cropT);
+        r = clamp01(p.cropR);
+        b = clamp01(p.cropB);
+        W = static_cast<float>(srcW);
+        H = static_cast<float>(srcH);
+        wA = (k & 1) ? H : W;
+        hA = (k & 1) ? W : H;
+    }
+
+    // (u, v): posición en la imagen final (0..1, y hacia abajo) -> posición en la fuente (0..1).
+    void sourceUv(float u, float v, float& xs, float& ys) const {
+        float ax = l + (1.f - r - l) * u;
+        float ay = t + (1.f - b - t) * v;
+        float cx = 0.5f * wA, cy = 0.5f * hA;
+        float dx = ax * wA - cx, dy = ay * hA - cy;
+        float sx = (cx + ca * dx + sa * dy) / wA;
+        float sy = (cy - sa * dx + ca * dy) / hA;
+        switch (k) {
+            case 1: xs = sy; ys = 1.f - sx; break;
+            case 2: xs = 1.f - sx; ys = 1.f - sy; break;
+            case 3: xs = 1.f - sy; ys = sx; break;
+            default: xs = sx; ys = sy; break;
+        }
+    }
+};
+
+inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
+
+}  // namespace
+
+void outputSize(int srcW, int srcH, const Params& p, int& outW, int& outH) {
+    Geo g(srcW, srcH, p);
+    outW = std::max(1, static_cast<int>(std::lround((1.f - g.l - g.r) * g.wA)));
+    outH = std::max(1, static_cast<int>(std::lround((1.f - g.t - g.b) * g.hA)));
+}
+
+void developGeometry(const uint16_t* src, int w, int h, const Params& p,
+                     uint8_t* dst, int outW, int outH, int threads) {
+    Developer dev(p);
+    Geo g(w, h, p);
+    constexpr float inv = 1.f / 65535.f;
+    parallelRows(outH, threads, [&](int y0, int y1) {
+        for (int oy = y0; oy < y1; ++oy) {
+            uint8_t* d = dst + static_cast<size_t>(oy) * outW * 3;
+            float v = (static_cast<float>(oy) + 0.5f) / static_cast<float>(outH);
+            for (int ox = 0; ox < outW; ++ox, d += 3) {
+                float u = (static_cast<float>(ox) + 0.5f) / static_cast<float>(outW);
+                float xs, ys;
+                g.sourceUv(u, v, xs, ys);
+                // Bilineal con los bordes repetidos (igual que CLAMP_TO_EDGE en la GPU).
+                float fx = xs * g.W - 0.5f, fy = ys * g.H - 0.5f;
+                float flx = std::floor(fx), fly = std::floor(fy);
+                float tx = fx - flx, ty = fy - fly;
+                // Igual que sampleBilinear() en develop.frag: dentro de 1e-4 px del centro de un
+                // texel se ajusta a él (el redondeo no debe mezclar vecinos brillantes en un negro).
+                tx = tx < 1e-4f ? 0.f : (tx > 0.9999f ? 1.f : tx);
+                ty = ty < 1e-4f ? 0.f : (ty > 0.9999f ? 1.f : ty);
+                int x0 = std::min(std::max(static_cast<int>(flx), 0), w - 1);
+                int x1 = std::min(std::max(static_cast<int>(flx) + 1, 0), w - 1);
+                int y0i = std::min(std::max(static_cast<int>(fly), 0), h - 1);
+                int y1i = std::min(std::max(static_cast<int>(fly) + 1, 0), h - 1);
+                const uint16_t* a = src + (static_cast<size_t>(y0i) * w + x0) * 3;
+                const uint16_t* b = src + (static_cast<size_t>(y0i) * w + x1) * 3;
+                const uint16_t* c = src + (static_cast<size_t>(y1i) * w + x0) * 3;
+                const uint16_t* e = src + (static_cast<size_t>(y1i) * w + x1) * 3;
+                float rgb[3];
+                for (int ch = 0; ch < 3; ++ch)
+                    rgb[ch] = lerp(lerp(a[ch], b[ch], tx), lerp(c[ch], e[ch], tx), ty) * inv;
+                dev.pixel(rgb[0], rgb[1], rgb[2], d);
             }
         }
     });

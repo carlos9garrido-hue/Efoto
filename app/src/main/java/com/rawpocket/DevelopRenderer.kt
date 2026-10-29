@@ -29,6 +29,7 @@ class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var program = 0
     private var texture = 0
     private var paramsLocation = -1
+    private var rotLocation = -1
     private var uploaded: GpuPhoto? = null
     private var surfaceWidth = 1
     private var surfaceHeight = 1
@@ -40,6 +41,7 @@ class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
         if (program == 0) return
 
         paramsLocation = GLES30.glGetUniformLocation(program, "uParams")
+        rotLocation = GLES30.glGetUniformLocation(program, "uRot")
         val tex = IntArray(1)
         GLES30.glGenTextures(1, tex, 0)
         texture = tex[0]
@@ -75,15 +77,25 @@ class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
             uploaded = p
         }
 
-        // Ajuste "contain": la foto entera, centrada, sin deformarse.
-        val scale = min(surfaceWidth.toFloat() / p.width, surfaceHeight.toFloat() / p.height)
-        val w = (p.width * scale).roundToInt().coerceIn(1, surfaceWidth)
-        val h = (p.height * scale).roundToInt().coerceIn(1, surfaceHeight)
+        // La imagen final es la foto girada y recortada: su tamaño (como en outputSize() de C++)
+        // decide el encuadre. Ajuste "contain": entera, centrada, sin deformarse.
+        val values = params
+        val turns = Math.floor(values[ANGLE_INDEX + 1] + 0.5).toInt() and 3
+        val frameW = (if (turns and 1 == 1) p.height else p.width).toFloat()
+        val frameH = (if (turns and 1 == 1) p.width else p.height).toFloat()
+        fun crop(i: Int) = values[ANGLE_INDEX + 2 + i].coerceIn(0f, 1f)
+        val outW = (frameW * (1f - crop(0) - crop(2))).coerceAtLeast(1f)
+        val outH = (frameH * (1f - crop(1) - crop(3))).coerceAtLeast(1f)
+        val scale = min(surfaceWidth / outW, surfaceHeight / outH)
+        val w = (outW * scale).roundToInt().coerceIn(1, surfaceWidth)
+        val h = (outH * scale).roundToInt().coerceIn(1, surfaceHeight)
         GLES30.glViewport((surfaceWidth - w) / 2, (surfaceHeight - h) / 2, w, h)
 
         GLES30.glUseProgram(program)
-        val values = params
         GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, values, 0)
+        // cos/sin del enderezado en doble precisión (la GPU solo garantiza 2^-11 de error)
+        val angle = Math.toRadians(values[ANGLE_INDEX].toDouble())
+        GLES30.glUniform2f(rotLocation, Math.cos(angle).toFloat(), Math.sin(angle).toFloat())
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
     }
 
@@ -128,7 +140,8 @@ class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     private companion object {
         const val TAG = "RawPocketGL"
-        const val PARAM_COUNT = 39  // igual que Params::kCount en develop.h
+        const val PARAM_COUNT = 45  // igual que Params::kCount en develop.h
+        const val ANGLE_INDEX = 39  // Params::kGeomStart: enderezado, giros, recorte L/T/R/B
         const val BG = 0x0E / 255f
     }
 }

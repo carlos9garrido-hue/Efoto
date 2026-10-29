@@ -145,6 +145,34 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(showOriginal = show) }
     }
 
+    // ---------------------------------------------------------------- geometría
+
+    /** Enderezado en grados (-45..45). El recorte se ajusta solo para no dejar esquinas vacías. */
+    fun setAngle(degrees: Float) = editGeometry { p, w, h ->
+        p.withGeometry(p.rotation, degrees, p.aspect, w, h)
+    }
+
+    /** Gira la foto en pasos de 90° (+1 = horario, -1 = antihorario). */
+    fun rotate(quarterTurns: Int) = editGeometry { p, w, h ->
+        p.withGeometry(p.rotation + quarterTurns, p.angle, p.aspect, w, h)
+    }
+
+    fun setAspect(index: Int) = editGeometry { p, w, h ->
+        p.withGeometry(p.rotation, p.angle, index, w, h)
+    }
+
+    /** Quita giro, enderezado y recorte; conserva el resto de las ediciones. */
+    fun resetGeometry() {
+        _state.update { it.copy(params = it.params.withoutGeometry()) }
+        scheduleSave()
+    }
+
+    private fun editGeometry(change: (EditParams, Int, Int) -> EditParams) {
+        val photo = _state.value.photo ?: return
+        _state.update { it.copy(params = change(it.params, photo.width, photo.height)) }
+        scheduleSave()
+    }
+
     fun consumeMessage() {
         _state.update { it.copy(message = null) }
     }

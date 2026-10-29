@@ -37,6 +37,12 @@ class MainActivity : ComponentActivity() {
                     onParam = viewModel::setParam,
                     onResetParam = viewModel::resetParam,
                     onResetAll = viewModel::resetAll,
+                    crop = CropActions(
+                        onAngle = viewModel::setAngle,
+                        onRotate = viewModel::rotate,
+                        onAspect = viewModel::setAspect,
+                        onReset = viewModel::resetGeometry,
+                    ),
                     onHoldOriginal = viewModel::setShowOriginal,
                     onExport = viewModel::export,
                     onMessageShown = viewModel::consumeMessage,

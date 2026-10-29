@@ -12,7 +12,8 @@ struct Params {
     // 10 básicos + 5 puntos de curva + 8 bandas de color x (tono, saturación, luminosidad)
     static constexpr int kCurvePoints = 5;  // en x = 0, .25, .5, .75, 1
     static constexpr int kHslBands = 8;     // rojo, naranja, amarillo, verde, aqua, azul, púrpura, magenta
-    static constexpr int kCount = 10 + kCurvePoints + kHslBands * 3;
+    static constexpr int kGeomStart = 10 + kCurvePoints + kHslBands * 3;  // 39
+    static constexpr int kCount = kGeomStart + 6;                          // 45
     float exposure = 0;     // EV, -5 .. +5
     float contrast = 0;     // -1 .. +1
     float highlights = 0;   // -1 .. +1
@@ -27,9 +28,27 @@ struct Params {
     float curve[kCurvePoints] = {0, 0, 0, 0, 0};
     // HSL: por banda [tono, saturación, luminosidad], cada uno -1 .. +1.
     float hsl[kHslBands * 3] = {};
+    // Geometría. Orden: primero se gira (rotate90), luego se endereza (angle) sobre ese marco
+    // y por último se recorta (insets, como fracción del marco girado).
+    float angle = 0;      // grados, -45 .. +45; positivo = la foto gira en sentido horario
+    float rotate90 = 0;   // giros de 90° en sentido horario: 0, 1, 2 ó 3
+    float cropL = 0, cropT = 0, cropR = 0, cropB = 0;  // recorte por lado, 0 .. 1
+
+    bool hasGeometry() const {
+        return angle != 0.f || rotate90 != 0.f || cropL > 0.f || cropT > 0.f || cropR > 0.f ||
+               cropB > 0.f;
+    }
 
     static Params fromArray(const float* a);
 };
+
+// Tamaño de la imagen final tras girar y recortar una fuente de srcW x srcH.
+void outputSize(int srcW, int srcH, const Params& p, int& outW, int& outH);
+
+// Revela aplicando la geometría (giro, enderezado y recorte) con muestreo bilineal.
+// dst: outW * outH * 3 bytes (use outputSize). Los píxeles fuera de la foto se repiten del borde.
+void developGeometry(const uint16_t* src, int w, int h, const Params& p,
+                     uint8_t* dst, int outW, int outH, int threads);
 
 class Developer {
 public:

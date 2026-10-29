@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 
 @Composable
 fun EditorScreen(
@@ -66,6 +68,7 @@ fun EditorScreen(
     onParam: (Adjustment, Float) -> Unit,
     onResetParam: (Adjustment) -> Unit,
     onResetAll: () -> Unit,
+    crop: CropActions,
     onHoldOriginal: (Boolean) -> Unit,
     onExport: () -> Unit,
     onMessageShown: () -> Unit,
@@ -87,7 +90,7 @@ fun EditorScreen(
             EditorViewModel.Status.LOADING -> LoadingScreen()
             EditorViewModel.Status.ERROR -> ErrorScreen(state.error.orEmpty(), onPick)
             EditorViewModel.Status.READY -> ReadyScreen(
-                state, onPick, onParam, onResetParam, onResetAll, onHoldOriginal, onExport,
+                state, onPick, onParam, onResetParam, onResetAll, crop, onHoldOriginal, onExport,
             )
         }
         SnackbarHost(
@@ -161,6 +164,7 @@ private fun ReadyScreen(
     onParam: (Adjustment, Float) -> Unit,
     onResetParam: (Adjustment) -> Unit,
     onResetAll: () -> Unit,
+    crop: CropActions,
     onHoldOriginal: (Boolean) -> Unit,
     onExport: () -> Unit,
 ) {
@@ -212,17 +216,19 @@ private fun ReadyScreen(
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Group.entries.forEach { g ->
-                    val selected = g == group
-                    TextButton(onClick = { group = g }) {
-                        Text(
-                            g.label,
-                            color = if (selected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                // Las pestañas se desplazan si no caben (pantallas estrechas).
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                    Group.entries.forEach { g ->
+                        val selected = g == group
+                        TextButton(onClick = { group = g }) {
+                            Text(
+                                g.label,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
-                Spacer(Modifier.weight(1f))
                 TextButton(onClick = onResetAll, enabled = !state.params.isDefault) { Text("Restablecer") }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
@@ -235,6 +241,7 @@ private fun ReadyScreen(
                 when (group) {
                     Group.CURVE -> CurvePreview(state.params)
                     Group.HSL -> BandPicker(band, state.params) { band = it }
+                    Group.CROP -> CropPanel(state.params, crop)
                     else -> Unit
                 }
                 val bandFilter = if (group == Group.HSL) Band.entries[band] else null
@@ -396,6 +403,78 @@ private fun BandPicker(selected: Int, params: EditParams, onSelect: (Int) -> Uni
                 contentAlignment = Alignment.Center,
             ) {
                 if (edited) Box(Modifier.size(6.dp).clip(CircleShape).background(Palette.Background))
+            }
+        }
+    }
+}
+
+/** Acciones del panel Recorte (las implementa el ViewModel). */
+class CropActions(
+    val onAngle: (Float) -> Unit,
+    val onRotate: (Int) -> Unit,
+    val onAspect: (Int) -> Unit,
+    val onReset: () -> Unit,
+)
+
+/** Girar 90°, enderezar con deslizador y elegir proporción; el recorte se ajusta solo. */
+@Composable
+private fun CropPanel(params: EditParams, actions: CropActions) {
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = { actions.onRotate(-1) }, shape = RoundedCornerShape(10.dp)) { Text("Girar izq.") }
+            OutlinedButton(onClick = { actions.onRotate(1) }, shape = RoundedCornerShape(10.dp)) { Text("Girar der.") }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = actions.onReset, enabled = params.hasGeometry) { Text("Quitar") }
+        }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Enderezar", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            val angle = params.angle
+            // Tocar el valor lo restablece a 0.
+            Text(
+                if (angle == 0f) "0°" else String.format(Locale.US, "%+.1f°", angle),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (angle == 0f) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { actions.onAngle(0f) }
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            )
+        }
+        Slider(
+            value = params.angle,
+            onValueChange = actions.onAngle,
+            valueRange = -EditParams.MAX_ANGLE..EditParams.MAX_ANGLE,
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = Palette.SurfaceHigh,
+            ),
+        )
+        Text("Proporción", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AspectPreset.entries.forEachIndexed { i, preset ->
+                val selected = i == params.aspect
+                Text(
+                    preset.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (selected) MaterialTheme.colorScheme.primary else Palette.SurfaceHigh)
+                        .clickable { actions.onAspect(i) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
             }
         }
     }
