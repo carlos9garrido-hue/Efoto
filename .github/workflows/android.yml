@@ -1,0 +1,56 @@
+name: Compilar Efoto
+
+# Compila el APK de depuración en la nube y lo deja para descargar:
+#   Actions -> (última ejecución) -> Artifacts -> Efoto-debug-apk
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    name: APK de depuración
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: SDK, NDK y CMake
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compilar
+        run: gradle assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Efoto-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  nativo:
+    name: Pruebas del motor (C++)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias
+        run: sudo apt-get update && sudo apt-get install -y cmake zlib1g-dev python3
+      - name: Compilar y probar
+        run: |
+          cmake -S native-tests -B build-tests -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-tests -j4
+          ctest --test-dir build-tests --output-on-failure
