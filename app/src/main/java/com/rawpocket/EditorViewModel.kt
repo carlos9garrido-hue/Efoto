@@ -14,6 +14,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -59,6 +62,16 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     private val _recents = MutableStateFlow(recentStore.load())
     val recents: StateFlow<List<RecentItem>> = _recents.asStateFlow()
     val thumbDir: File = File(app.filesDir, "thumbs").apply { mkdirs() }
+
+    private val presetStore = PresetStore(File(app.filesDir, "presets.json"))
+    private val userPresets = MutableStateFlow(presetStore.load())
+    /** Presets propios primero y luego los de fábrica. */
+    val presets: StateFlow<List<Preset>> = userPresets
+        .map { it + FactoryPresets.all }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, FactoryPresets.all + userPresets.value)
+    private var clipboard: Map<String, Float>? = null
+    private val _canPaste = MutableStateFlow(false)
+    val canPaste: StateFlow<Boolean> = _canPaste.asStateFlow()
 
     /** Protege el acceso al handle nativo (abrir, exportar y cerrar nunca se solapan). */
     private val lock = Mutex()
@@ -221,6 +234,52 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             else Adjustment.entries.filter { it.group == group }.forEach { p = it.set(p, 0f) }
             st.copy(params = p)
         }
+        onEdited()
+    }
+
+    // ---------------------------------------------------------------- presets y portapapeles de ajustes
+
+    fun applyPreset(preset: Preset) {
+        if (_state.value.status != Status.READY) return
+        remember(null)
+        _state.update { it.copy(params = PresetLogic.apply(it.params, preset)) }
+        onEdited()
+    }
+
+    fun saveCurrentAsPreset(name: String) {
+        val values = PresetLogic.capture(_state.value.params)
+        if (values.isEmpty()) return
+        val unique = PresetLogic.uniqueName(name, userPresets.value.map { it.name } + FactoryPresets.all.map { it.name })
+        userPresets.value = listOf(Preset("user:${System.currentTimeMillis()}", unique, values)) + userPresets.value
+        persistPresets()
+        _state.update { it.copy(message = "Preset “$unique” guardado.") }
+    }
+
+    fun deletePreset(preset: Preset) {
+        if (preset.builtIn) return
+        userPresets.value = userPresets.value.filter { it.id != preset.id }
+        persistPresets()
+    }
+
+    private fun persistPresets() {
+        val snapshot = userPresets.value
+        viewModelScope.launch(Dispatchers.IO) { runCatching { presetStore.save(snapshot) } }
+    }
+
+    /** Copia los ajustes de esta foto (sin giro ni recorte) para pegarlos en otra. */
+    fun copySettings() {
+        val values = PresetLogic.capture(_state.value.params)
+        if (values.isEmpty()) return
+        clipboard = values
+        _canPaste.value = true
+        _state.update { it.copy(message = "Ajustes copiados.") }
+    }
+
+    fun pasteSettings() {
+        val values = clipboard ?: return
+        if (_state.value.status != Status.READY) return
+        remember(null)
+        _state.update { it.copy(params = PresetLogic.applyValues(it.params, values)) }
         onEdited()
     }
 

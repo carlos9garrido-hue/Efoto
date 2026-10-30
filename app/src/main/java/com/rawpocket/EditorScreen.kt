@@ -77,6 +77,9 @@ fun EditorScreen(
     onResetAll: () -> Unit,
     crop: CropActions,
     tools: ToolActions,
+    presets: List<Preset>,
+    canPaste: Boolean,
+    presetActions: PresetActions,
     onHoldOriginal: (Boolean) -> Unit,
     onExport: () -> Unit,
     onMessageShown: () -> Unit,
@@ -102,7 +105,7 @@ fun EditorScreen(
             EditorViewModel.Status.LOADING -> LoadingScreen()
             EditorViewModel.Status.ERROR -> ErrorScreen(state.error.orEmpty(), onHome)
             EditorViewModel.Status.READY -> ReadyScreen(
-                state, onHome, onParam, onResetParam, onResetAll, crop, tools, onHoldOriginal, onExport,
+                state, onHome, onParam, onResetParam, onResetAll, crop, tools, presets, canPaste, presetActions, onHoldOriginal, onExport,
             )
         }
         SnackbarHost(
@@ -156,6 +159,9 @@ private fun ReadyScreen(
     onResetAll: () -> Unit,
     crop: CropActions,
     tools: ToolActions,
+    presets: List<Preset>,
+    canPaste: Boolean,
+    presetActions: PresetActions,
     onHoldOriginal: (Boolean) -> Unit,
     onExport: () -> Unit,
 ) {
@@ -163,6 +169,8 @@ private fun ReadyScreen(
     var open by rememberSaveable { mutableStateOf(true) }   // panel desplegado o recogido
     var band by rememberSaveable { mutableStateOf(0) }      // banda de color seleccionada en HSL
     var picking by remember { mutableStateOf(false) }       // cuentagotas de balance de blancos activo
+    val presetsTab = Group.entries.size  // la última pestaña es la de presets
+    val isPresets = tab == presetsTab
     val group = Group.entries[tab.coerceIn(0, Group.entries.size - 1)]
 
     Column(Modifier.fillMaxSize()) {
@@ -201,9 +209,11 @@ private fun ReadyScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Overline(group.label, Modifier.weight(1f))
-                        if (group == Group.LIGHT || group == Group.COLOR) SoftButton("Auto", tools.onAuto, accent = true)
-                        SoftButton("Restablecer", { tools.onResetGroup(group) }, enabled = state.params.groupChanged(group))
+                        Overline(if (isPresets) "Presets" else group.label, Modifier.weight(1f))
+                        if (!isPresets) {
+                            if (group == Group.LIGHT || group == Group.COLOR) SoftButton("Auto", tools.onAuto, accent = true)
+                            SoftButton("Restablecer", { tools.onResetGroup(group) }, enabled = state.params.groupChanged(group))
+                        }
                         if (!state.params.isDefault) SoftButton("Todo", onResetAll)
                     }
                     Column(
@@ -212,7 +222,8 @@ private fun ReadyScreen(
                             .verticalScroll(rememberScrollState())
                             .padding(horizontal = 20.dp, vertical = 4.dp)
                     ) {
-                        when (group) {
+                        if (isPresets) PresetsPanel(presets, canPaste, hasEdits = !state.params.isDefault, actions = presetActions)
+                        else when (group) {
                             Group.COLOR -> SoftButton(
                                 if (picking) "Toca un punto gris o blanco…" else "Cuentagotas de balance de blancos",
                                 { picking = !picking },
@@ -225,7 +236,7 @@ private fun ReadyScreen(
                             else -> Unit
                         }
                         val bandFilter = if (group == Group.HSL) Band.entries[band] else null
-                        Adjustment.entries.filter { it.group == group && it.band == bandFilter }.forEach { adj ->
+                        if (!isPresets) Adjustment.entries.filter { it.group == group && it.band == bandFilter }.forEach { adj ->
                             AdjustmentRow(
                                 adjustment = adj,
                                 value = adj.get(state.params),
@@ -237,7 +248,7 @@ private fun ReadyScreen(
                 }
             }
             ToolRail(
-                tabs = Group.entries.map { it.icon() to it.label },
+                tabs = Group.entries.map { it.icon() to it.label } + (ToolIcon.PRESETS to "Presets"),
                 selected = if (open) tab else -1,
                 onSelect = { i -> if (open && i == tab) open = false else { tab = i; open = true } },
                 modifier = Modifier.fillMaxWidth(),

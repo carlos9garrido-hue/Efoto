@@ -29,6 +29,8 @@ class MainActivity : ComponentActivity() {
             RawPocketTheme {
                 val state by viewModel.state.collectAsStateWithLifecycle()
                 val recents by viewModel.recents.collectAsStateWithLifecycle()
+                val presets by viewModel.presets.collectAsStateWithLifecycle()
+                val canPaste by viewModel.canPaste.collectAsStateWithLifecycle()
                 val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) openUri(uri)
                 }
@@ -55,6 +57,15 @@ class MainActivity : ComponentActivity() {
                         onAuto = viewModel::autoAdjust,
                         onPickWb = viewModel::pickWhiteBalance,
                         onResetGroup = viewModel::resetGroup,
+                    ),
+                    presets = presets,
+                    canPaste = canPaste,
+                    presetActions = PresetActions(
+                        onApply = viewModel::applyPreset,
+                        onSave = viewModel::saveCurrentAsPreset,
+                        onDelete = viewModel::deletePreset,
+                        onCopy = viewModel::copySettings,
+                        onPaste = viewModel::pasteSettings,
                     ),
                     onHoldOriginal = viewModel::setShowOriginal,
                     onExport = viewModel::export,
