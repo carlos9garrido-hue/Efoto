@@ -3,6 +3,7 @@
 #include <android/bitmap.h>
 #include <android/log.h>
 
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -131,6 +132,24 @@ Java_com_rawpocket_RawNative_nativeSampleWb(JNIEnv* env, jobject, jlong h, jfloa
     if (!rp::whiteBalanceFromRgb(rgb[0], rgb[1], rgb[2], t, tint)) return JNI_FALSE;
     float out[2] = {t, tint};
     env->SetFloatArrayRegion(jout, 0, 2, out);
+    return JNI_TRUE;
+}
+
+// Capas de los efectos con vecinos de la vista previa, listas para subirlas como texturas:
+// bufA = RGBA16F (w*h*8 bytes), bufB = RG16F (w*h*4 bytes). Se calculan la primera vez.
+JNIEXPORT jboolean JNICALL
+Java_com_rawpocket_RawNative_nativeFillAux(JNIEnv* env, jobject, jlong h, jobject bufA, jobject bufB) {
+    auto* s = lookup(h);
+    if (!s || !bufA || !bufB) return JNI_FALSE;
+    rp::ensureAux(*s);
+    if (s->aux.empty() || s->aux.w != s->pw || s->aux.h != s->ph) return JNI_FALSE;
+    void* da = env->GetDirectBufferAddress(bufA);
+    void* db = env->GetDirectBufferAddress(bufB);
+    const jlong px = static_cast<jlong>(s->pw) * s->ph;
+    if (!da || !db || env->GetDirectBufferCapacity(bufA) < px * 8 || env->GetDirectBufferCapacity(bufB) < px * 4)
+        return JNI_FALSE;
+    std::memcpy(da, s->aux.a.data(), static_cast<size_t>(px) * 8);
+    std::memcpy(db, s->aux.b.data(), static_cast<size_t>(px) * 4);
     return JNI_TRUE;
 }
 

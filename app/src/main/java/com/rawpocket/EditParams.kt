@@ -12,8 +12,11 @@ import kotlin.math.sin
 enum class Group(val label: String) {
     LIGHT("Luz"),
     COLOR("Color"),
+    DETAIL("Detalle"),
     CURVE("Curva"),
     HSL("HSL"),
+    GRADE("Gradación"),
+    EFFECTS("Efectos"),
     CROP("Recorte"),
 }
 
@@ -40,7 +43,8 @@ enum class Band(val key: String, val label: String, val argb: Long) {
 
 /**
  * Un control del editor. [index] es la posición en el arreglo que recibe el motor:
- *   0-9   básicos · 10-14 curva · 15-38 HSL (banda * 3 + tono/saturación/luminosidad).
+ *   0-9   básicos · 10-14 curva · 15-38 HSL (banda * 3 + tono/saturación/luminosidad)
+ *   45-50 detalle · 51-53 efectos · 54-60 gradación (las posiciones 39-44 son la geometría).
  * Debe coincidir con `Params::fromArray` en develop.cpp y con `uParams` en develop.frag.
  */
 class Adjustment private constructor(
@@ -53,6 +57,7 @@ class Adjustment private constructor(
     val index: Int,
     private val isEv: Boolean = false,
     val band: Band? = null,
+    private val isDegrees: Boolean = false,
 ) {
     fun get(p: EditParams): Float = p.values[index]
 
@@ -61,6 +66,8 @@ class Adjustment private constructor(
     /** Texto del valor junto al control. */
     fun format(v: Float): String = when {
         isEv -> if (v == 0f) "0" else String.format(Locale.US, "%+.2f EV", v)
+        isDegrees -> "${v.roundToInt()}°"
+        min == 0f -> v.times(100f).roundToInt().toString()
         else -> {
             val n = (v * 100f).roundToInt()
             if (n == 0) "0" else String.format(Locale.US, "%+d", n)
@@ -71,7 +78,9 @@ class Adjustment private constructor(
         const val CURVE_START = 10
         const val CURVE_POINTS = 5
         const val HSL_START = CURVE_START + CURVE_POINTS
-        const val COUNT = HSL_START + 8 * 3
+        const val COUNT = HSL_START + 8 * 3  // 39; después vienen 6 posiciones de geometría
+        const val FX_START = COUNT + 6       // 45
+        const val FX_COUNT = 16
 
         val entries: List<Adjustment> = buildList {
             add(Adjustment("exposure", "Exposición", -5f, 5f, Group.LIGHT, 0, isEv = true))
@@ -95,6 +104,24 @@ class Adjustment private constructor(
                 add(Adjustment("${band.key}_sat", "Saturación", -1f, 1f, Group.HSL, base + 1, band = band))
                 add(Adjustment("${band.key}_lum", "Luminosidad", -1f, 1f, Group.HSL, base + 2, band = band))
             }
+
+            // Detalle (45-50)
+            add(Adjustment("clarity", "Claridad", -1f, 1f, Group.DETAIL, FX_START))
+            add(Adjustment("texture", "Textura", -1f, 1f, Group.DETAIL, FX_START + 1))
+            add(Adjustment("dehaze", "Quitar neblina", -1f, 1f, Group.DETAIL, FX_START + 2))
+            add(Adjustment("sharpen", "Nitidez", 0f, 1f, Group.DETAIL, FX_START + 3))
+            add(Adjustment("nr_luma", "Ruido (luminancia)", 0f, 1f, Group.DETAIL, FX_START + 4))
+            add(Adjustment("nr_color", "Ruido (color)", 0f, 1f, Group.DETAIL, FX_START + 5))
+            // Efectos (51-53)
+            add(Adjustment("vignette", "Viñeta", -1f, 1f, Group.EFFECTS, FX_START + 6))
+            add(Adjustment("vignette_mid", "Punto medio", -1f, 1f, Group.EFFECTS, FX_START + 7))
+            add(Adjustment("grain", "Grano", 0f, 1f, Group.EFFECTS, FX_START + 8))
+            // Gradación de color (54-60)
+            listOf("Sombras", "Medios", "Luces").forEachIndexed { z, zone ->
+                add(Adjustment("grade${z}_hue", "$zone · tono", 0f, 360f, Group.GRADE, FX_START + 9 + z * 2, isDegrees = true))
+                add(Adjustment("grade${z}_sat", "$zone · saturación", 0f, 1f, Group.GRADE, FX_START + 10 + z * 2))
+            }
+            add(Adjustment("grade_balance", "Balance", -1f, 1f, Group.GRADE, FX_START + 15))
         }
 
         val EXPOSURE: Adjustment = entries[0]
@@ -131,7 +158,8 @@ class EditParams private constructor(val values: List<Float>) {
     val hasGeometry: Boolean get() = (ANGLE..CROP_B).any { values[it] != 0f }
 
     /** Sin geometría (conserva el resto de las ediciones). */
-    fun withoutGeometry(): EditParams = EditParams(values.mapIndexed { i, v -> if (i >= ANGLE) 0f else v })
+    fun withoutGeometry(): EditParams =
+        EditParams(values.mapIndexed { i, v -> if (i in ANGLE..CROP_B || i == ASPECT) 0f else v })
 
     /**
      * Cambia giro, enderezado y proporción y recalcula el recorte automático: el mayor rectángulo
@@ -164,21 +192,21 @@ class EditParams private constructor(val values: List<Float>) {
     fun toJson(): String = JSONObject().apply {
         put("version", 2)
         Adjustment.entries.forEach { put(it.name, it.get(this@EditParams).toDouble()) }
-        GEO_KEYS.forEachIndexed { i, key -> put(key, values[ANGLE + i].toDouble()) }
+        GEO_KEYS.forEachIndexed { i, key -> put(key, values[if (i < 6) ANGLE + i else ASPECT].toDouble()) }
     }.toString()
 
     override fun equals(other: Any?) = other is EditParams && other.values == values
     override fun hashCode() = values.hashCode()
 
     companion object {
-        // Geometría: las posiciones 39..44 las lee el motor (Params::kGeomStart); la 45 es solo de la app.
+        // Geometría: las posiciones 39..44 las lee el motor (Params::kGeomStart); 45..60 son los efectos; la 61 es solo de la app.
         const val ANGLE = Adjustment.COUNT  // 39
         const val ROTATE = ANGLE + 1
         const val CROP_L = ANGLE + 2
         const val CROP_T = ANGLE + 3
         const val CROP_R = ANGLE + 4
         const val CROP_B = ANGLE + 5
-        const val ASPECT = ANGLE + 6
+        const val ASPECT = Adjustment.FX_START + Adjustment.FX_COUNT  // 61: solo la usa la app
         const val SIZE = ASPECT + 1
         const val ENGINE_COUNT = ASPECT  // lo que lee el motor (Params::kCount)
         const val MAX_ANGLE = 45f

@@ -4,9 +4,9 @@ var fails = 0
 fun check(c: Boolean, msg: String) { println((if (c) "  ok:   " else "  FAIL: ") + msg); if (!c) fails++ }
 fun main() {
     val all = Adjustment.entries
-    check(all.size == 39 && Adjustment.COUNT == 39, "39 controles")
-    check(all.map { it.index } == (0 until 39).toList(), "índices 0..38 en orden y sin repetir")
-    check(all.map { it.name }.toSet().size == 39, "claves únicas")
+    check(all.size == 55 && Adjustment.COUNT == 39, "55 controles (39 hasta HSL + 16 de detalle, efectos y gradación)")
+    check(all.map { it.index } == (0 until 39).toList() + (45 until 61).toList(), "índices 0..38 y 45..60 en orden y sin repetir (39..44 = geometría)")
+    check(all.map { it.name }.toSet().size == 55, "claves únicas")
     check(all.take(10).map { it.name } == listOf("exposure","contrast","highlights","shadows","whites","blacks","temperature","tint","vibrance","saturation"), "primeros 10 = orden del motor y claves de la versión 1")
     check(all[10].group == Group.CURVE && all[14].group == Group.CURVE && all[15].group == Group.HSL && all[38].group == Group.HSL, "grupos curva (10-14) y HSL (15-38)")
     check(all[15].name == "red_hue" && all[16].name == "red_sat" && all[17].name == "red_lum" && all[38].name == "magenta_lum", "HSL: banda*3 + tono/sat/lum")
@@ -14,7 +14,7 @@ fun main() {
     check(all.filter { it.group == Group.HSL }.all { it.band != null } && all.filter { it.group != Group.HSL }.all { it.band == null }, "solo HSL tiene banda")
 
     var p = EditParams()
-    check(p.isDefault && p.toFloatArray().size == 46 && p.toFloatArray().all { it == 0f }, "por defecto: 46 ceros (39 ajustes + 7 de geometría)")
+    check(p.isDefault && p.toFloatArray().size == 62 && p.toFloatArray().all { it == 0f }, "por defecto: 62 ceros (55 ajustes + 7 de geometría)")
     val exp = all[0]; val blue = all.first { it.name == "blue_sat" }; val c2 = all.first { it.name == "curve2" }
     p = exp.set(p, 1.5f); p = blue.set(p, -0.4f); p = c2.set(p, 0.2f)
     check(!p.isDefault && p.toFloatArray()[0] == 1.5f && p.toFloatArray()[15 + 5 * 3 + 1] == -0.4f && p.toFloatArray()[12] == 0.2f, "set escribe en la posición correcta del arreglo")
@@ -40,8 +40,23 @@ fun main() {
     check(inc.zipWithNext().all { (a, b) -> b >= a - 1e-6f }, "curva creciente se mantiene monótona (sin ondulaciones)")
 
     // ---- Geometría: giro, enderezado y recorte automático
-    check(EditParams.ANGLE == 39 && EditParams.ROTATE == 40 && EditParams.CROP_L == 41 && EditParams.CROP_B == 44 && EditParams.ASPECT == 45 && EditParams.SIZE == 46 && EditParams.ENGINE_COUNT == 45,
-        "posiciones 39..44 = ángulo, giros, recorte L/T/R/B (como Params en develop.h); 45 = proporción (solo app)")
+    check(EditParams.ANGLE == 39 && EditParams.ROTATE == 40 && EditParams.CROP_L == 41 && EditParams.CROP_B == 44 && EditParams.ASPECT == 61 && EditParams.SIZE == 62 && EditParams.ENGINE_COUNT == 61,
+        "posiciones 39..44 = ángulo, giros, recorte L/T/R/B (como Params en develop.h); 45..60 efectos; 61 = proporción (solo app)")
+    // ---- Detalle, efectos y gradación
+    run {
+        val byName = all.associateBy { it.name }
+        val expect = listOf("clarity","texture","dehaze","sharpen","nr_luma","nr_color","vignette","vignette_mid","grain",
+            "grade0_hue","grade0_sat","grade1_hue","grade1_sat","grade2_hue","grade2_sat","grade_balance")
+        check(expect.mapIndexed { i, n -> byName[n]?.index == 45 + i }.all { it }, "efectos en las posiciones 45..60 (orden de Params en develop.h)")
+        check(byName["grade0_hue"]!!.max == 360f && byName["grade0_hue"]!!.format(220f) == "220°" && byName["sharpen"]!!.format(0.5f) == "50", "tono en grados; nitidez 0..100")
+        var q = byName["clarity"]!!.set(EditParams(), 0.5f)
+        q = byName["grain"]!!.set(q, 0.3f)
+        val rot = q.withGeometry(1, 10f, 1, 6000, 4000)
+        check(rot.values[45] == 0.5f && rot.values[53] == 0.3f, "girar/recortar no toca los efectos")
+        check(rot.withoutGeometry().values[45] == 0.5f && rot.withoutGeometry().values[53] == 0.3f && !rot.withoutGeometry().hasGeometry, "quitar geometría conserva los efectos")
+        val back = EditParams.fromJson(q.toJson())!!
+        check(back.values[45] == 0.5f && back.values[53] == 0.3f, "los efectos se guardan y se leen")
+    }
     val d0 = EditParams()
     check(d0.withGeometry(0, 0f, 0, 6000, 4000).isDefault, "sin giro, ángulo 0 y proporción original: sigue siendo la imagen por defecto (recorte exactamente 0)")
     val r1 = d0.withGeometry(1, 0f, 0, 6000, 4000)
@@ -83,7 +98,9 @@ fun main() {
     check(ratioOk, "el recorte respeta la proporción pedida (±0,4 %)")
 
     val g = d0.withGeometry(3, 12.5f, 2, 6000, 4000).let { exp.set(it, 0.7f) }
-    check(EditParams.fromJson(g.toJson()) == g && g.hasGeometry, "guardar y leer: la geometría se conserva")
+    val gb = EditParams.fromJson(g.toJson())
+    if (gb != g) for (i in g.values.indices) if (gb == null || gb.values[i] != g.values[i]) println("   dif en $i: ${g.values[i]} vs ${gb?.values?.get(i)}")
+    check(gb == g && g.hasGeometry, "guardar y leer: la geometría se conserva")
     val noGeo = g.withoutGeometry()
     check(!noGeo.hasGeometry && exp.get(noGeo) == 0.7f && noGeo.aspect == 0, "quitar geometría conserva el resto de las ediciones")
     check(EditParams.fromJson("angle=99.0;crop_l=5.0;rotate90=7.0")!!.let { it.angle == 45f && it.values[EditParams.CROP_L] == 0.95f && it.rotation == 3 }, "valores de geometría fuera de rango se recortan")

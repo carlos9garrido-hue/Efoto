@@ -33,6 +33,9 @@ object RawNative {
     /** Cuentagotas: (u, v) sobre la imagen girada y recortada -> out = temperatura, matiz. */
     external fun nativeSampleWb(handle: Long, params: FloatArray, u: Float, v: Float, out: FloatArray): Boolean
 
+    /** Capas de los efectos con vecinos (RGBA16F y RG16F, ver Aux en develop.h). Se calculan al primer uso. */
+    external fun nativeFillAux(handle: Long, bufA: java.nio.ByteBuffer, bufB: java.nio.ByteBuffer): Boolean
+
     external fun nativeErrorText(code: Int): String
 
     /**

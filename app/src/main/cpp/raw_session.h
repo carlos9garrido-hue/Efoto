@@ -20,6 +20,7 @@ struct Session {
     int pw = 0, ph = 0;
     std::vector<uint16_t> small;  // vista previa reducida (~512 px) para histograma y análisis
     int sw = 0, sh = 0;
+    Aux aux;  // capas de los efectos con vecinos para la vista previa (se calculan al primer uso)
     std::string info;  // make|model|iso|shutter|aperture|focal|fullW|fullH
 };
 
@@ -30,6 +31,9 @@ int openSession(const std::string& path, int previewLongEdge, std::unique_ptr<Se
 // Revela a resolución completa (o limitada a maxEdge px si > 0) y escribe un JPEG.
 int exportJpeg(const Session& s, const Params& p, const std::string& outPath, int quality,
                int maxEdge);
+
+// Calcula (una vez) las capas auxiliares de la vista previa.
+void ensureAux(Session& s);
 
 // Miniatura JPEG (lado largo = edge) de la vista previa sin editar, para la pantalla de inicio.
 int exportThumbnail(const Session& s, const std::string& outPath, int edge, int quality);

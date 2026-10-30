@@ -80,6 +80,21 @@ Params Params::fromArray(const float* a) {
     p.cropT = g[3];
     p.cropR = g[4];
     p.cropB = g[5];
+    const float* f = a + Params::kFxStart;
+    p.clarity = f[0];
+    p.texture = f[1];
+    p.dehaze = f[2];
+    p.sharpen = f[3];
+    p.nrLuma = f[4];
+    p.nrColor = f[5];
+    p.vigAmount = f[6];
+    p.vigMid = f[7];
+    p.grain = f[8];
+    for (int z = 0; z < 3; ++z) {
+        p.gradeHue[z] = f[9 + z * 2];
+        p.gradeSat[z] = f[10 + z * 2];
+    }
+    p.gradeBalance = f[15];
     return p;
 }
 
@@ -108,6 +123,19 @@ Developer::Developer(const Params& p) : p_(p) {
     float hs = 0.f;
     for (float v : p.hsl) hs += std::fabs(v);
     hslActive_ = hs > 0.f;
+
+    spatial_ = p.hasSpatial();
+    grade_ = p.gradeSat[0] > 0.f || p.gradeSat[1] > 0.f || p.gradeSat[2] > 0.f;
+}
+
+void Developer::setOutput(int outW, int outH) {
+    outW_ = std::max(1, outW);
+    outH_ = std::max(1, outH);
+    // El grano tiene una cuadrícula de como máximo 2048 px de lado largo: se ve igual en la vista
+    // previa y en la exportación a resolución completa.
+    float s = std::min(1.f, 2048.f / static_cast<float>(std::max(outW_, outH_)));
+    gridW_ = std::max(1, static_cast<int>(std::lround(outW_ * s)));
+    gridH_ = std::max(1, static_cast<int>(std::lround(outH_ * s)));
 }
 
 float Developer::curveAt(float x) const {
@@ -162,10 +190,74 @@ void Developer::applyHsl(float c[3]) const {
     }
 }
 
-void Developer::pixel(float r, float g, float b, uint8_t* out) const {
+namespace {
+
+inline float lum(const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; }
+
+// Color puro de un tono (grados), igual que el color de salida de applyHsl con s = v = 1.
+void hueRgb(float deg, float out[3]) {
+    float h6 = mod6(deg / 60.f);
+    constexpr float K[3] = {0.f, 4.f, 2.f};
+    for (int i = 0; i < 3; ++i) out[i] = clamp01(std::fabs(mod6(h6 + K[i]) - 3.f) - 1.f);
+}
+
+// Ruido de cuadrícula en [-1, 1], determinista (mismo resultado en CPU y GPU).
+float gridNoise(int x, int y) {
+    uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    h ^= h >> 16;
+    return static_cast<float>(h & 0xFFFFu) * (1.f / 32767.5f) - 1.f;
+}
+
+}  // namespace
+
+void Developer::pixel(float r, float g, float b, const float* aux, float u, float v,
+                      uint8_t* out) const {
     static const float* lut = encodeLut();
 
-    float c[3] = {r * gain_[0], g * gain_[1], b * gain_[2]};
+    float c[3] = {r, g, b};
+
+    // Efectos con vecinos (sobre la imagen lineal, antes de exposición y tonos).
+    if (spatial_ && aux) {
+        const float* N = aux;  // imagen con desenfoque pequeño
+        const float Lc = aux[3], Lm = aux[4], Hz = aux[5];
+        if (p_.dehaze != 0.f) {
+            constexpr float A = 0.95f;  // luz ambiente supuesta
+            if (p_.dehaze > 0.f) {
+                float t = std::min(1.f, std::max(0.25f, 1.f - 0.9f * p_.dehaze * (Hz / A)));
+                for (float& x : c) x = (x - A) / t + A;
+            } else {
+                float k = -p_.dehaze * 0.5f;
+                for (float& x : c) x = x + (A - x) * k;
+            }
+            for (float& x : c) x = std::max(x, 0.f);
+        }
+        const float Yn = lum(N);
+        if (p_.nrColor > 0.f) {  // el color se acerca al de la versión desenfocada
+            float Y = lum(c);
+            for (int i = 0; i < 3; ++i) c[i] += p_.nrColor * ((N[i] - Yn) - (c[i] - Y));
+        }
+        if (p_.nrLuma > 0.f) {  // la luminancia también, salvo en los bordes
+            float Y = lum(c);
+            float d = std::fabs(std::sqrt(std::max(Y, 0.f)) - std::sqrt(std::max(Yn, 0.f)));
+            float w = p_.nrLuma * (1.f - smoothstep(0.02f, 0.12f, d));
+            float dy = w * (Yn - Y);
+            for (float& x : c) x += dy;
+        }
+        if (p_.sharpen > 0.f || p_.texture != 0.f || p_.clarity != 0.f) {
+            float Y = std::max(lum(c), 0.f);
+            float s = std::sqrt(Y), sS = std::sqrt(std::max(Yn, 0.f));
+            float sT = std::sqrt(std::max(Lm, 0.f)), sC = std::sqrt(std::max(Lc, 0.f));
+            float wC = std::max(1.f - (2.f * sC - 1.f) * (2.f * sC - 1.f), 0.f);  // más en medios tonos
+            float s2 = s + p_.sharpen * 0.9f * (s - sS) + p_.texture * 0.9f * (s - sT) +
+                       p_.clarity * 1.2f * wC * (s - sC);
+            s2 = std::max(s2, 0.f);
+            float sc = std::min(((s2 * s2) + 0.002f) / (Y + 0.002f), 8.f);
+            for (float& x : c) x *= sc;
+        }
+    }
+
+    for (int i = 0; i < 3; ++i) c[i] *= gain_[i];
 
     // Recuperación de altas luces en lineal: compresión suave sobre la rodilla.
     if (hlk_ > 0.f) {
@@ -205,6 +297,48 @@ void Developer::pixel(float r, float g, float b, uint8_t* out) const {
 
     for (float& v : c) v = clamp01(v);
     if (hslActive_) applyHsl(c);
+
+    // Gradación de color: un tinte distinto en sombras, medios y luces.
+    if (grade_) {
+        float y = lum(c);
+        float bal = p_.gradeBalance * 0.25f;
+        float wS = 1.f - smoothstep(0.10f, 0.55f + bal, y);
+        float wH = smoothstep(0.45f + bal, 0.90f, y);
+        float wM = clamp01(1.f - wS - wH);
+        const float zone[3] = {wS, wM, wH};
+        for (int z = 0; z < 3; ++z) {
+            if (p_.gradeSat[z] <= 0.f) continue;
+            float tint[3];
+            hueRgb(p_.gradeHue[z], tint);
+            float tl = lum(tint);
+            float k = p_.gradeSat[z] * zone[z] * 0.30f;
+            for (int i = 0; i < 3; ++i) c[i] += (tint[i] - tl) * k;
+        }
+        for (float& x : c) x = clamp01(x);
+    }
+
+    // Viñeta: oscurece (o aclara) hacia las esquinas de la imagen final.
+    if (p_.vigAmount != 0.f) {
+        float aspect = static_cast<float>(outW_) / static_cast<float>(outH_);
+        float dx = (u - 0.5f) * aspect, dy = v - 0.5f;
+        float d = std::sqrt(dx * dx + dy * dy) / (0.5f * std::sqrt(aspect * aspect + 1.f));
+        float t = smoothstep(0.45f + 0.4f * p_.vigMid, 1.f, d);
+        if (p_.vigAmount < 0.f) {
+            for (float& x : c) x *= 1.f + p_.vigAmount * t;
+        } else {
+            for (float& x : c) x += (1.f - x) * p_.vigAmount * t;
+        }
+    }
+
+    // Grano: más visible en medios tonos que en negros y blancos.
+    if (p_.grain > 0.f) {
+        int gx = static_cast<int>(std::floor(u * static_cast<float>(gridW_)));
+        int gy = static_cast<int>(std::floor(v * static_cast<float>(gridH_)));
+        float y = lum(c);
+        float amp = p_.grain * 0.10f * (0.4f + 1.6f * y * (1.f - y));
+        float n = gridNoise(gx, gy) * amp;
+        for (float& x : c) x += n;
+    }
 
     for (int i = 0; i < 3; ++i) out[i] = static_cast<uint8_t>(clamp01(c[i]) * 255.f + 0.5f);
 }
@@ -306,16 +440,65 @@ void rgb16ToRgba16f(const uint16_t* src, int w, int h, uint16_t* dst) {
     }
 }
 
+namespace {
+
+// Tabla half -> float (65536 entradas): los efectos leen muchos valores half por píxel.
+const float* halfTable() {
+    static const std::vector<float> t = [] {
+        std::vector<float> v(65536);
+        for (int i = 0; i < 65536; ++i) v[i] = halfToFloat(static_cast<uint16_t>(i));
+        return v;
+    }();
+    return t.data();
+}
+
+// Muestra las capas auxiliares en (xs, ys) (0..1 sobre la fuente) con la misma bilineal que la
+// fuente (y que sampleAux() en develop.frag). out: a.rgba, b.rg.
+void auxSample(const Aux& aux, float xs, float ys, float out[6]) {
+    const float* tab = halfTable();
+    const int w = aux.w, h = aux.h;
+    float fx = xs * static_cast<float>(w) - 0.5f, fy = ys * static_cast<float>(h) - 0.5f;
+    float flx = std::floor(fx), fly = std::floor(fy);
+    float tx = fx - flx, ty = fy - fly;
+    tx = tx < 1e-4f ? 0.f : (tx > 0.9999f ? 1.f : tx);
+    ty = ty < 1e-4f ? 0.f : (ty > 0.9999f ? 1.f : ty);
+    int x0 = std::min(std::max(static_cast<int>(flx), 0), w - 1);
+    int x1 = std::min(std::max(static_cast<int>(flx) + 1, 0), w - 1);
+    int y0 = std::min(std::max(static_cast<int>(fly), 0), h - 1);
+    int y1 = std::min(std::max(static_cast<int>(fly) + 1, 0), h - 1);
+    auto idx = [&](int x, int y) { return static_cast<size_t>(y) * w + x; };
+    for (int ch = 0; ch < 4; ++ch) {
+        float a = tab[aux.a[idx(x0, y0) * 4 + ch]], b = tab[aux.a[idx(x1, y0) * 4 + ch]];
+        float c = tab[aux.a[idx(x0, y1) * 4 + ch]], e = tab[aux.a[idx(x1, y1) * 4 + ch]];
+        float top = a + (b - a) * tx, bottom = c + (e - c) * tx;
+        out[ch] = top + (bottom - top) * ty;
+    }
+    for (int ch = 0; ch < 2; ++ch) {
+        float a = tab[aux.b[idx(x0, y0) * 2 + ch]], b = tab[aux.b[idx(x1, y0) * 2 + ch]];
+        float c = tab[aux.b[idx(x0, y1) * 2 + ch]], e = tab[aux.b[idx(x1, y1) * 2 + ch]];
+        float top = a + (b - a) * tx, bottom = c + (e - c) * tx;
+        out[4 + ch] = top + (bottom - top) * ty;
+    }
+}
+
+}  // namespace
+
 void developToRgba(const uint16_t* src, int w, int h, const Params& p,
-                   uint8_t* dst, int dstStride, int threads) {
+                   uint8_t* dst, int dstStride, int threads, const Aux* aux) {
     Developer dev(p);
+    dev.setOutput(w, h);
+    const Aux* ax = (aux && !aux->empty()) ? aux : nullptr;
     constexpr float inv = 1.f / 65535.f;
     parallelRows(h, threads, [&](int y0, int y1) {
         for (int y = y0; y < y1; ++y) {
             const uint16_t* s = src + static_cast<size_t>(y) * w * 3;
             uint8_t* d = dst + static_cast<size_t>(y) * dstStride;
             for (int x = 0; x < w; ++x, s += 3, d += 4) {
-                dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, d);
+                float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(w);
+                float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
+                float av[6];
+                if (ax) auxSample(*ax, u, v, av);
+                dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, ax ? av : nullptr, u, v, d);
                 d[3] = 255;
             }
         }
@@ -375,8 +558,10 @@ void outputSize(int srcW, int srcH, const Params& p, int& outW, int& outH) {
 }
 
 void developGeometry(const uint16_t* src, int w, int h, const Params& p,
-                     uint8_t* dst, int outW, int outH, int threads) {
+                     uint8_t* dst, int outW, int outH, int threads, const Aux* aux) {
     Developer dev(p);
+    dev.setOutput(outW, outH);
+    const Aux* ax = (aux && !aux->empty()) ? aux : nullptr;
     Geo g(w, h, p);
     constexpr float inv = 1.f / 65535.f;
     parallelRows(outH, threads, [&](int y0, int y1) {
@@ -406,24 +591,118 @@ void developGeometry(const uint16_t* src, int w, int h, const Params& p,
                 float rgb[3];
                 for (int ch = 0; ch < 3; ++ch)
                     rgb[ch] = lerp(lerp(a[ch], b[ch], tx), lerp(c[ch], e[ch], tx), ty) * inv;
-                dev.pixel(rgb[0], rgb[1], rgb[2], d);
+                float av[6];
+                if (ax) auxSample(*ax, xs, ys, av);
+                dev.pixel(rgb[0], rgb[1], rgb[2], ax ? av : nullptr, u, v, d);
             }
         }
     });
 }
 
 void developToRgb8(const uint16_t* src, int w, int h, const Params& p,
-                   uint8_t* dst, int threads) {
+                   uint8_t* dst, int threads, const Aux* aux) {
     Developer dev(p);
+    dev.setOutput(w, h);
+    const Aux* ax = (aux && !aux->empty()) ? aux : nullptr;
     constexpr float inv = 1.f / 65535.f;
     parallelRows(h, threads, [&](int y0, int y1) {
         for (int y = y0; y < y1; ++y) {
             const uint16_t* s = src + static_cast<size_t>(y) * w * 3;
             uint8_t* d = dst + static_cast<size_t>(y) * w * 3;
-            for (int x = 0; x < w; ++x, s += 3, d += 3)
-                dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, d);
+            for (int x = 0; x < w; ++x, s += 3, d += 3) {
+                float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(w);
+                float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
+                float av[6];
+                if (ax) auxSample(*ax, u, v, av);
+                dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, ax ? av : nullptr, u, v, d);
+            }
         }
     });
+}
+
+namespace {
+
+// Desenfoque de caja con bordes repetidos y radio r, sobre un plano w*h (en el sitio).
+void boxBlurPlane(std::vector<float>& d, int w, int h, int r) {
+    if (r <= 0) return;
+    const double inv = 1.0 / (2 * r + 1);
+    // Horizontal.
+    for (int y = 0; y < h; ++y) {
+        float* row = &d[static_cast<size_t>(y) * w];
+        std::vector<float> src(row, row + w);
+        double sum = static_cast<double>(r + 1) * src[0];
+        for (int i = 1; i <= r; ++i) sum += src[std::min(i, w - 1)];
+        for (int x = 0; x < w; ++x) {
+            row[x] = static_cast<float>(sum * inv);
+            sum += src[std::min(x + r + 1, w - 1)] - src[std::max(x - r, 0)];
+        }
+    }
+    // Vertical, fila a fila (acceso secuencial a memoria).
+    std::vector<float> src(d);
+    std::vector<double> col(w);
+    for (int x = 0; x < w; ++x) {
+        double sum = static_cast<double>(r + 1) * src[x];
+        for (int i = 1; i <= r; ++i) sum += src[static_cast<size_t>(std::min(i, h - 1)) * w + x];
+        col[x] = sum;
+    }
+    for (int y = 0; y < h; ++y) {
+        float* row = &d[static_cast<size_t>(y) * w];
+        for (int x = 0; x < w; ++x) row[x] = static_cast<float>(col[x] * inv);
+        const float* add = &src[static_cast<size_t>(std::min(y + r + 1, h - 1)) * w];
+        const float* sub = &src[static_cast<size_t>(std::max(y - r, 0)) * w];
+        for (int x = 0; x < w; ++x) col[x] += add[x] - sub[x];
+    }
+}
+
+// Dos pasadas de caja: una aproximación suave de un desenfoque gaussiano.
+void softBlur(std::vector<float>& d, int w, int h, int r) {
+    boxBlurPlane(d, w, h, r);
+    boxBlurPlane(d, w, h, r);
+}
+
+}  // namespace
+
+void buildAux(const uint16_t* src, int w, int h, int step, Aux& out) {
+    std::vector<uint16_t> reduced;
+    int bw = w, bh = h;
+    if (step > 1) {
+        boxDownsample16(src, w, h, step, reduced, bw, bh);
+        src = reduced.data();
+    }
+    const size_t n = static_cast<size_t>(bw) * bh;
+    const int longEdge = std::max(bw, bh);
+    auto radius = [&](float frac, int minimum) {
+        return std::max(minimum, static_cast<int>(std::lround(longEdge * frac)));
+    };
+
+    std::vector<float> R(n), G(n), B(n), Y(n), M(n);
+    constexpr float inv = 1.f / 65535.f;
+    for (size_t i = 0; i < n; ++i) {
+        float r = src[i * 3] * inv, g = src[i * 3 + 1] * inv, b = src[i * 3 + 2] * inv;
+        R[i] = r; G[i] = g; B[i] = b;
+        Y[i] = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        M[i] = std::min(r, std::min(g, b));
+    }
+    std::vector<float> Lm(Y), Lc(Y);
+    softBlur(R, bw, bh, radius(0.0008f, 1));
+    softBlur(G, bw, bh, radius(0.0008f, 1));
+    softBlur(B, bw, bh, radius(0.0008f, 1));
+    softBlur(Lm, bw, bh, radius(0.004f, 2));
+    softBlur(Lc, bw, bh, radius(0.02f, 4));
+    softBlur(M, bw, bh, radius(0.03f, 4));
+
+    out.w = bw;
+    out.h = bh;
+    out.a.resize(n * 4);
+    out.b.resize(n * 2);
+    for (size_t i = 0; i < n; ++i) {
+        out.a[i * 4] = floatToHalf(R[i]);
+        out.a[i * 4 + 1] = floatToHalf(G[i]);
+        out.a[i * 4 + 2] = floatToHalf(B[i]);
+        out.a[i * 4 + 3] = floatToHalf(Lc[i]);
+        out.b[i * 2] = floatToHalf(Lm[i]);
+        out.b[i * 2 + 1] = floatToHalf(M[i]);
+    }
 }
 
 }  // namespace rp

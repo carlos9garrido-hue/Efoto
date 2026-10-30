@@ -13,7 +13,8 @@ struct Params {
     static constexpr int kCurvePoints = 5;  // en x = 0, .25, .5, .75, 1
     static constexpr int kHslBands = 8;     // rojo, naranja, amarillo, verde, aqua, azul, púrpura, magenta
     static constexpr int kGeomStart = 10 + kCurvePoints + kHslBands * 3;  // 39
-    static constexpr int kCount = kGeomStart + 6;                          // 45
+    static constexpr int kFxStart = kGeomStart + 6;                        // 45
+    static constexpr int kCount = kFxStart + 16;                           // 61
     float exposure = 0;     // EV, -5 .. +5
     float contrast = 0;     // -1 .. +1
     float highlights = 0;   // -1 .. +1
@@ -34,6 +35,22 @@ struct Params {
     float rotate90 = 0;   // giros de 90° en sentido horario: 0, 1, 2 ó 3
     float cropL = 0, cropT = 0, cropR = 0, cropB = 0;  // recorte por lado, 0 .. 1
 
+    // Detalle (necesita vecinos: ver Aux). Claridad, textura y neblina -1..1; nitidez y ruido 0..1.
+    float clarity = 0, texture = 0, dehaze = 0;
+    float sharpen = 0, nrLuma = 0, nrColor = 0;
+    // Efectos por píxel. Viñeta -1 (oscurece) .. +1 (aclara); punto medio -1 .. +1; grano 0 .. 1.
+    float vigAmount = 0, vigMid = 0, grain = 0;
+    // Gradación de color: tono (grados 0..360) y saturación (0..1) de sombras, medios y luces,
+    // y el balance entre ellos (-1 .. +1).
+    float gradeHue[3] = {0, 0, 0};
+    float gradeSat[3] = {0, 0, 0};
+    float gradeBalance = 0;
+
+    bool hasSpatial() const {
+        return clarity != 0.f || texture != 0.f || dehaze != 0.f || sharpen > 0.f || nrLuma > 0.f ||
+               nrColor > 0.f;
+    }
+
     bool hasGeometry() const {
         return angle != 0.f || rotate90 != 0.f || cropL > 0.f || cropT > 0.f || cropR > 0.f ||
                cropB > 0.f;
@@ -42,25 +59,47 @@ struct Params {
     static Params fromArray(const float* a);
 };
 
+// Capas auxiliares para los efectos que miran a los vecinos (claridad, textura, neblina, nitidez y
+// reducción de ruido). Se calculan una vez por imagen, no dependen de los ajustes, y se guardan en
+// half-float: son exactamente los bytes que la app sube a la GPU, así CPU y GPU leen lo mismo.
+//   a (RGBA): rgb = la imagen con un desenfoque pequeño (lineal), a = luminancia con desenfoque grande
+//   b (RG)  : r = luminancia con desenfoque medio, g = mínimo de canales con desenfoque grande
+// Los radios son fracciones del lado largo, así que se ven igual en la vista previa y al exportar.
+struct Aux {
+    int w = 0, h = 0;
+    std::vector<uint16_t> a;  // w*h*4
+    std::vector<uint16_t> b;  // w*h*2
+    bool empty() const { return w <= 0 || h <= 0; }
+};
+
+// step = 1 usa la imagen tal cual; 2 trabaja a media resolución (ahorra memoria al exportar).
+void buildAux(const uint16_t* src, int w, int h, int step, Aux& out);
+
 // Tamaño de la imagen final tras girar y recortar una fuente de srcW x srcH.
 void outputSize(int srcW, int srcH, const Params& p, int& outW, int& outH);
 
 // Revela aplicando la geometría (giro, enderezado y recorte) con muestreo bilineal.
 // dst: outW * outH * 3 bytes (use outputSize). Los píxeles fuera de la foto se repiten del borde.
 void developGeometry(const uint16_t* src, int w, int h, const Params& p,
-                     uint8_t* dst, int outW, int outH, int threads);
+                     uint8_t* dst, int outW, int outH, int threads, const Aux* aux = nullptr);
 
 class Developer {
 public:
     explicit Developer(const Params& p);
-    // r,g,b: RGB lineal (1.0 = blanco). out: 3 bytes sRGB.
-    void pixel(float r, float g, float b, uint8_t* out) const;
+    // Tamaño de la imagen final: el grano y la viñeta dependen de él.
+    void setOutput(int outW, int outH);
+    // r,g,b: RGB lineal (1.0 = blanco). aux: 6 valores (a.rgba, b.rg) de esa posición o nullptr.
+    // (u, v): posición en la imagen final (0..1). out: 3 bytes sRGB.
+    void pixel(float r, float g, float b, const float* aux, float u, float v, uint8_t* out) const;
+    void pixel(float r, float g, float b, uint8_t* out) const { pixel(r, g, b, nullptr, 0.5f, 0.5f, out); }
 
 private:
     void applyHsl(float c[3]) const;
     float curveAt(float x) const;
 
     Params p_;
+    bool spatial_ = false, grade_ = false;
+    int outW_ = 1, outH_ = 1, gridW_ = 1, gridH_ = 1;
     float gain_[3];
     float hlk_;
     bool curveActive_ = false;
@@ -82,10 +121,10 @@ void rgb16ToRgba16f(const uint16_t* src, int w, int h, uint16_t* dst);
 
 // Revela RGB16 -> RGBA8 (alfa = 255). dstStride en bytes.
 void developToRgba(const uint16_t* src, int w, int h, const Params& p,
-                   uint8_t* dst, int dstStride, int threads);
+                   uint8_t* dst, int dstStride, int threads, const Aux* aux = nullptr);
 
 // Revela RGB16 -> RGB8 empaquetado (w*h*3 bytes).
 void developToRgb8(const uint16_t* src, int w, int h, const Params& p,
-                   uint8_t* dst, int threads);
+                   uint8_t* dst, int threads, const Aux* aux = nullptr);
 
 }  // namespace rp

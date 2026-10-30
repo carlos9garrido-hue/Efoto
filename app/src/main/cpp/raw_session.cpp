@@ -165,16 +165,21 @@ int exportJpeg(const Session& s, const Params& p, const std::string& outPath, in
             w = rw;
             h = rh;
         }
+        // Los efectos con vecinos necesitan sus capas auxiliares; a media resolución si la foto es
+        // muy grande (los desenfoques son suaves) para no duplicar la memoria.
+        Aux aux;
+        if (p.hasSpatial()) buildAux(src, w, h, std::max(w, h) > 3072 ? 2 : 1, aux);
+        const Aux* ax = aux.empty() ? nullptr : &aux;
         if (p.hasGeometry()) {
             int ow = 0, oh = 0;
             outputSize(w, h, p, ow, oh);
             rgb.resize(static_cast<size_t>(ow) * oh * 3);
-            developGeometry(src, w, h, p, rgb.data(), ow, oh, workerThreads());
+            developGeometry(src, w, h, p, rgb.data(), ow, oh, workerThreads(), ax);
             w = ow;
             h = oh;
         } else {
             rgb.resize(static_cast<size_t>(w) * h * 3);
-            developToRgb8(src, w, h, p, rgb.data(), workerThreads());
+            developToRgb8(src, w, h, p, rgb.data(), workerThreads(), ax);
         }
     }  // la imagen de 16 bits se libera antes de codificar
 
@@ -184,6 +189,10 @@ int exportJpeg(const Session& s, const Params& p, const std::string& outPath, in
     int ok = stbi_write_jpg_to_func(writeToFile, f, w, h, 3, rgb.data(), q);
     std::fclose(f);
     return ok ? 0 : kErrWrite;
+}
+
+void ensureAux(Session& s) {
+    if (s.aux.empty() && !s.preview.empty()) buildAux(s.preview.data(), s.pw, s.ph, 1, s.aux);
 }
 
 int exportThumbnail(const Session& s, const std::string& outPath, int edge, int quality) {

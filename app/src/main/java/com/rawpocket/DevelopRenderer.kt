@@ -7,6 +7,7 @@ import android.util.Log
 import java.nio.ByteBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -14,7 +15,13 @@ import kotlin.math.roundToInt
  * Vista previa lista para la GPU: RGBA half-float lineal (8 bytes por píxel) en un búfer directo.
  * Es independiente de la sesión nativa, así que puede vivir en el hilo de GL sin riesgo de carreras.
  */
-class GpuPhoto(val width: Int, val height: Int, val data: ByteBuffer)
+class GpuPhoto(val width: Int, val height: Int, val data: ByteBuffer) {
+    /** Capas de los efectos con vecinos; se calculan la primera vez que hacen falta. */
+    @Volatile var aux: GpuAux? = null
+}
+
+/** RGBA16F (w*h*8 bytes) y RG16F (w*h*4 bytes), del mismo tamaño que la foto. */
+class GpuAux(val a: ByteBuffer, val b: ByteBuffer)
 
 /**
  * Dibuja la foto aplicando el revelado en un fragment shader (assets/shaders/develop.frag).
@@ -31,6 +38,9 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
     private var paramsLocation = -1
     private var rotLocation = -1
     private var uploaded: GpuPhoto? = null
+    private var uploadedAux: GpuAux? = null
+    private var auxTextures = IntArray(2)
+    private var outLocation = -1
     private var surfaceWidth = 1
     private var surfaceHeight = 1
 
@@ -52,6 +62,25 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glUseProgram(program)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uTex"), 0)
+        outLocation = GLES30.glGetUniformLocation(program, "uOut")
+
+        // Texturas de las capas auxiliares (unidades 1 y 2). Mientras no hay capas, 1x1 vacías.
+        uploadedAux = null
+        GLES30.glGenTextures(2, auxTextures, 0)
+        for (i in 0..1) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE1 + i)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, auxTextures[i])
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            val empty = ByteBuffer.allocateDirect(8).order(java.nio.ByteOrder.nativeOrder())
+            if (i == 0) GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, 1, 1, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, empty)
+            else GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RG16F, 1, 1, 0, GLES30.GL_RG, GLES30.GL_HALF_FLOAT, empty)
+        }
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uAuxA"), 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uAuxB"), 2)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -77,10 +106,26 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
             uploaded = p
         }
 
+        // Capas de los efectos con vecinos: se suben una vez. Sin ellas, esos efectos se ignoran.
+        val aux = p.aux
+        if (aux != null && aux !== uploadedAux) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, auxTextures[0])
+            aux.a.position(0)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, p.width, p.height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, aux.a)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, auxTextures[1])
+            aux.b.position(0)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RG16F, p.width, p.height, 0, GLES30.GL_RG, GLES30.GL_HALF_FLOAT, aux.b)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            uploadedAux = aux
+        }
+
         // La imagen final es la foto girada y recortada: su tamaño (como en outputSize() de C++)
         // decide el encuadre. Ajuste "contain": entera, centrada, sin deformarse; el zoom y el
         // desplazamiento agrandan y mueven ese rectángulo (lo que sobresale lo recorta la pantalla).
-        val values = params
+        val values = params.copyOf()
+        if (aux == null) for (i in FX_FIRST..FX_LAST_SPATIAL) values[i] = 0f
         val turns = Math.floor(values[ANGLE_INDEX + 1] + 0.5).toInt() and 3
         val frameW = (if (turns and 1 == 1) p.height else p.width).toFloat()
         val frameH = (if (turns and 1 == 1) p.width else p.height).toFloat()
@@ -103,6 +148,11 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         GLES30.glViewport(vx, vy, vw, vh)
 
         GLES30.glUseProgram(program)
+        // Tamaño de la imagen final y cuadrícula del grano (como Developer::setOutput en C++).
+        val oW = Math.round(outW).coerceAtLeast(1)
+        val oH = Math.round(outH).coerceAtLeast(1)
+        val gs = min(1f, 2048f / max(oW, oH))
+        GLES30.glUniform4f(outLocation, oW.toFloat(), oH.toFloat(), Math.round(oW * gs).coerceAtLeast(1).toFloat(), Math.round(oH * gs).coerceAtLeast(1).toFloat())
         // cos/sin del enderezado en doble precisión (la GPU solo garantiza 2^-11 de error)
         val angle = Math.toRadians(values[ANGLE_INDEX].toDouble())
         GLES30.glUniform2f(rotLocation, Math.cos(angle).toFloat(), Math.sin(angle).toFloat())
@@ -110,7 +160,7 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         if (view.splitOn) {
             // Comparación dividida: a la izquierda la foto sin ajustes (con la misma geometría),
             // a la derecha la editada. Cada mitad se dibuja recortada con scissor.
-            val original = values.copyOf().also { for (i in 0 until ANGLE_INDEX) it[i] = 0f }
+            val original = values.copyOf().also { for (i in 0 until PARAM_COUNT) if (i !in ANGLE_INDEX..ANGLE_INDEX + 5) it[i] = 0f }
             val divX = (vx + view.splitFrac * vw).roundToInt().coerceIn(0, surfaceWidth)
             GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
             GLES30.glScissor(0, 0, divX, surfaceHeight)
@@ -171,7 +221,9 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
 
     private companion object {
         const val TAG = "RawPocketGL"
-        const val PARAM_COUNT = 45  // igual que Params::kCount en develop.h
+        const val PARAM_COUNT = 61  // igual que Params::kCount en develop.h
+        const val FX_FIRST = 45  // Params::kFxStart: claridad..ruido (color) son los efectos con vecinos
+        const val FX_LAST_SPATIAL = 50
         const val ANGLE_INDEX = 39  // Params::kGeomStart: enderezado, giros, recorte L/T/R/B
         const val BG = 0x0E / 255f
     }

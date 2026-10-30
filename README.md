@@ -12,6 +12,8 @@ Revelador de fotos RAW para Android, pensado como un "Lightroom de bolsillo": ed
 
 Hecho:
 - Abre también JPG/JPEG y PNG (stb_image), con orientación y datos EXIF de cámara.
+- Detalle (claridad, textura, quitar neblina, nitidez, reducción de ruido), viñeta, grano y gradación de color (sombras/medios/luces); los efectos con vecinos usan capas auxiliares half-float idénticas en CPU y GPU.
+- Histograma, deshacer/rehacer, zoom, comparación dividida, ajuste automático y cuentagotas de balance de blancos.
 - Pantalla de inicio con fotos recientes (miniaturas); nada se abre solo al iniciar.
 - Lectura de RAW con LibRaw (CR2/CR3, NEF, ARW, DNG, RAF, ORF, RW2…), orientación y metadatos EXIF.
 - **Recorte y rotación**: girar 90° (izq./der.), enderezar de −45° a +45° con deslizador y proporciones 1:1, 4:5, 3:2 y 16:9. El recorte se ajusta solo al mayor rectángulo que cabe dentro de la foto enderezada (sin esquinas vacías). La vista previa y la exportación aplican la misma geometría.

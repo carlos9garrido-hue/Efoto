@@ -126,6 +126,17 @@ int main(int argc, char** argv) {
         std::string ex = dir + "/t_out.jpg";
         CHECK(rp::exportJpeg(*s, p, ex, 90, 0) == 0);
 
+        // exportar con efectos con vecinos + viñeta + grano
+        {
+            rp::Params fx; fx.clarity = 0.6f; fx.sharpen = 0.5f; fx.nrLuma = 0.3f; fx.vigAmount = -0.6f; fx.grain = 0.5f;
+            std::string ef = dir + "/t_fx.jpg";
+            CHECK(rp::exportJpeg(*s, fx, ef, 90, 0) == 0);
+            auto fileSize = [](const std::string& path) { FILE* f = std::fopen(path.c_str(), "rb"); if (!f) return -1L; std::fseek(f, 0, SEEK_END); long n = std::ftell(f); std::fclose(f); return n; };
+            CHECK(fileSize(ef) > 100 && fileSize(ef) != fileSize(ex));
+            rp::ensureAux(*s);
+            CHECK(!s->aux.empty() && s->aux.w == s->pw && s->aux.h == s->ph);
+        }
+
         // PNG
         std::vector<uint8_t> png;
         stbi_write_png_to_func(wr, &png, W, H, 3, rgb.data(), W * 3);

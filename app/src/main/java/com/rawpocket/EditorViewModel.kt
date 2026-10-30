@@ -43,6 +43,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val canRedo: Boolean = false,
         /** Histograma 4x256 (R, G, B, luminancia) de la foto revelada. */
         val histogram: IntArray? = null,
+        /** Sube cuando llegan las capas de detalle, para pedir un nuevo dibujo. */
+        val auxVersion: Int = 0,
         val exporting: Boolean = false,
         /** Aviso breve para mostrar en un Snackbar. */
         val message: String? = null,
@@ -82,7 +84,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = UiState(status = Status.LOADING)
             val result = withContext(Dispatchers.Default) { lock.withLock { openLocked(uri) } }
             _state.value = result
-            if (result.status == Status.READY) refreshHistogram()
+            if (result.status == Status.READY) {
+                refreshHistogram()
+                ensureAux()  // ediciones guardadas que ya usan detalle
+            }
             if (result.status == Status.ERROR) {
                 _recents.value = RecentList.remove(_recents.value, uri.toString())
                 saveRecents()
@@ -317,6 +322,37 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     private fun onEdited() {
         scheduleSave()
         refreshHistogram()
+        ensureAux()
+    }
+
+    private var auxJob: Job? = null
+
+    /** Calcula las capas de los efectos con vecinos la primera vez que alguno está activo. */
+    private fun ensureAux() {
+        val st = _state.value
+        val photo = st.photo ?: return
+        if (photo.aux != null || auxJob?.isActive == true) return
+        val v = st.params.values
+        if ((EFFECT_FIRST..EFFECT_LAST).none { v[it] != 0f }) return
+        auxJob = viewModelScope.launch {
+            val px = photo.width.toLong() * photo.height
+            val ok = withContext(Dispatchers.Default) {
+                lock.withLock {
+                    if (handle <= 0L || px * 8 > Int.MAX_VALUE) return@withLock false
+                    try {
+                        val a = ByteBuffer.allocateDirect((px * 8).toInt()).order(ByteOrder.nativeOrder())
+                        val b = ByteBuffer.allocateDirect((px * 4).toInt()).order(ByteOrder.nativeOrder())
+                        if (!RawNative.nativeFillAux(handle, a, b)) return@withLock false
+                        photo.aux = GpuAux(a, b)
+                        true
+                    } catch (e: OutOfMemoryError) {
+                        false
+                    }
+                }
+            }
+            if (ok) _state.update { it.copy(auxVersion = it.auxVersion + 1) }  // fuerza un nuevo dibujo
+            else _state.update { it.copy(message = "No hay memoria para los efectos de detalle.") }
+        }
     }
 
     /** Mantener pulsada la foto muestra el original sin ediciones. */
@@ -450,6 +486,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         const val EXPORT_QUALITY = 95
         const val THUMB_EDGE = 320
         const val MERGE_MS = 1000L
+        const val EFFECT_FIRST = Adjustment.FX_START  // claridad .. ruido (color)
+        const val EFFECT_LAST = Adjustment.FX_START + 5
         const val HISTORY_LIMIT = 60
         const val GEO_ANGLE_KEY = 100000
     }
