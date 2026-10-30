@@ -89,7 +89,7 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        GLES30.glClearColor(BG, BG, BG + 2f / 255f, 1f)  // #0E0E10, igual que Palette.Background
+        GLES30.glClearColor(BG, BG, BG + 2f / 255f, 1f)  // #0A0A0C, igual que Palette.Background
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
 
         val p = photo ?: return
@@ -225,6 +225,6 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         const val FX_FIRST = 45  // Params::kFxStart: claridad..ruido (color) son los efectos con vecinos
         const val FX_LAST_SPATIAL = 50
         const val ANGLE_INDEX = 39  // Params::kGeomStart: enderezado, giros, recorte L/T/R/B
-        const val BG = 0x0E / 255f
+        const val BG = 0x0A / 255f
     }
 }

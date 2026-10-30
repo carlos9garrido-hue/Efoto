@@ -11,12 +11,12 @@ import androidx.compose.ui.unit.sp
 
 // Paleta neutra y oscura: los controles no deben competir con los colores de la foto.
 object Palette {
-    val Background = Color(0xFF0E0E10)
-    val Surface = Color(0xFF17171A)
-    val SurfaceHigh = Color(0xFF222226)
-    val Outline = Color(0xFF3A3A40)
+    val Background = Color(0xFF0A0A0C)
+    val Surface = Color(0xFF131316)
+    val SurfaceHigh = Color(0xFF1D1D21)
+    val Outline = Color(0xFF2C2C32)
     val TextPrimary = Color(0xFFEDEDEF)
-    val TextSecondary = Color(0xFF9A9AA3)
+    val TextSecondary = Color(0xFF8E8E98)
     val Accent = Color(0xFFE8B04A)
 }
 
@@ -35,6 +35,7 @@ private val scheme = darkColorScheme(
 
 private val typography = Typography(
     titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.1.sp),
+    titleLarge = TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Light, letterSpacing = 6.sp),
     bodyMedium = TextStyle(fontSize = 14.sp),
     bodySmall = TextStyle(fontSize = 12.sp, letterSpacing = 0.2.sp),
     labelLarge = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium),

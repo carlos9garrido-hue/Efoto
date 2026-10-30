@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
                         onRedo = viewModel::redo,
                         onAuto = viewModel::autoAdjust,
                         onPickWb = viewModel::pickWhiteBalance,
+                        onResetGroup = viewModel::resetGroup,
                     ),
                     onHoldOriginal = viewModel::setShowOriginal,
                     onExport = viewModel::export,

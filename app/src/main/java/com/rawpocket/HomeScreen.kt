@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,23 +66,38 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(top = 24.dp, bottom = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text("EFOTO", style = MaterialTheme.typography.titleMedium.copy(letterSpacing = 6.sp))
-                Spacer(Modifier.height(8.dp))
+            Column(Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("efoto", style = MaterialTheme.typography.titleLarge)
+                    Box(Modifier.padding(start = 6.dp, top = 6.dp).size(7.dp).clip(CircleShape).background(Palette.Accent))
+                }
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    "RAW, JPG y PNG. Revela en tu bolsillo.",
+                    "Revelado RAW, JPG y PNG en tu bolsillo",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
                 )
-                Spacer(Modifier.height(20.dp))
-                Button(onClick = onPick, shape = RoundedCornerShape(12.dp)) { Text("Abrir foto") }
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(26.dp))
+                // Tarjeta principal para abrir una foto.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Palette.Surface)
+                        .border(1.dp, Palette.Outline, RoundedCornerShape(18.dp))
+                        .clickable(onClick = onPick)
+                        .padding(horizontal = 18.dp, vertical = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(44.dp).clip(CircleShape).background(Palette.Accent),
+                        contentAlignment = Alignment.Center,
+                    ) { IconGlyph(ToolIcon.PLUS, Color(0xFF1B1405), Modifier.size(22.dp)) }
+                    Column(Modifier.padding(start = 14.dp)) {
+                        Text("Abrir foto", style = MaterialTheme.typography.titleMedium)
+                        Text("Elige un RAW, JPG o PNG", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
         }
         if (recents.isEmpty()) {
@@ -117,46 +135,55 @@ private fun RecentTile(item: RecentItem, thumbDir: File, onClick: () -> Unit, on
             withContext(Dispatchers.IO) { runCatching { BitmapFactory.decodeFile(File(thumbDir, name).path) }.getOrNull() }
         }
     }
-    Column {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(10.dp))
-                .background(Palette.SurfaceHigh)
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center,
-        ) {
-            val b = bitmap
-            if (b != null) {
-                Image(
-                    bitmap = b.asImageBitmap(),
-                    contentDescription = item.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Text(
-                    item.name.substringAfterLast('.', "").uppercase(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Palette.SurfaceHigh)
+            .clickable(onClick = onClick),
+    ) {
+        val b = bitmap
+        if (b != null) {
+            Image(
+                bitmap = b.asImageBitmap(),
+                contentDescription = item.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
             Text(
-                item.name,
+                item.name.substringAfterLast('.', "").uppercase(),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+        // Degradado inferior con el nombre.
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))))
+                .padding(start = 8.dp, end = 8.dp, top = 18.dp, bottom = 6.dp),
+        ) {
+            Text(
+                item.name.substringBeforeLast('.'),
+                style = MaterialTheme.typography.bodySmall,
+                color = Palette.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(top = 4.dp),
             )
-            TextButton(onClick = onRemove, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
-                Text("✕", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(6.dp)
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) { IconGlyph(ToolIcon.CLOSE, Palette.TextPrimary, Modifier.size(12.dp)) }
     }
 }

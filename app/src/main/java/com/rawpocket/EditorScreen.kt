@@ -1,6 +1,7 @@
 package com.rawpocket
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -158,9 +159,11 @@ private fun ReadyScreen(
     onHoldOriginal: (Boolean) -> Unit,
     onExport: () -> Unit,
 ) {
-    var group by rememberSaveable { mutableStateOf(Group.LIGHT) }
-    var band by rememberSaveable { mutableStateOf(0) }  // banda de color seleccionada en HSL
-    var picking by remember { mutableStateOf(false) }   // cuentagotas de balance de blancos activo
+    var tab by rememberSaveable { mutableStateOf(0) }       // herramienta seleccionada
+    var open by rememberSaveable { mutableStateOf(true) }   // panel desplegado o recogido
+    var band by rememberSaveable { mutableStateOf(0) }      // banda de color seleccionada en HSL
+    var picking by remember { mutableStateOf(false) }       // cuentagotas de balance de blancos activo
+    val group = Group.entries[tab.coerceIn(0, Group.entries.size - 1)]
 
     Column(Modifier.fillMaxSize()) {
         TopBar(state, onHome, onExport)
@@ -181,66 +184,72 @@ private fun ReadyScreen(
                 .padding(horizontal = 8.dp),
         )
 
-        // Panel de controles.
+        // Panel de controles con esquinas superiores redondeadas.
         Column(
             Modifier
                 .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .background(Palette.Surface)
                 .windowInsetsPadding(WindowInsets.navigationBars)
         ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Las pestañas se desplazan si no caben (pantallas estrechas).
-                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
-                    Group.entries.forEach { g ->
-                        val selected = g == group
-                        TextButton(onClick = { group = g }) {
-                            Text(
-                                g.label,
-                                color = if (selected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
+            AnimatedVisibility(open) {
+                Column {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, end = 14.dp, top = 14.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Overline(group.label, Modifier.weight(1f))
+                        if (group == Group.LIGHT || group == Group.COLOR) SoftButton("Auto", tools.onAuto, accent = true)
+                        SoftButton("Restablecer", { tools.onResetGroup(group) }, enabled = state.params.groupChanged(group))
+                        if (!state.params.isDefault) SoftButton("Todo", onResetAll)
+                    }
+                    Column(
+                        Modifier
+                            .height(236.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 4.dp)
+                    ) {
+                        when (group) {
+                            Group.COLOR -> SoftButton(
+                                if (picking) "Toca un punto gris o blanco…" else "Cuentagotas de balance de blancos",
+                                { picking = !picking },
+                                accent = picking,
+                                modifier = Modifier.padding(vertical = 8.dp),
+                            )
+                            Group.CURVE -> CurvePreview(state.params)
+                            Group.HSL -> BandPicker(band, state.params) { band = it }
+                            Group.CROP -> CropPanel(state.params, crop)
+                            else -> Unit
+                        }
+                        val bandFilter = if (group == Group.HSL) Band.entries[band] else null
+                        Adjustment.entries.filter { it.group == group && it.band == bandFilter }.forEach { adj ->
+                            AdjustmentRow(
+                                adjustment = adj,
+                                value = adj.get(state.params),
+                                onChange = { onParam(adj, it) },
+                                onReset = { onResetParam(adj) },
                             )
                         }
                     }
                 }
-                TextButton(onClick = tools.onAuto) { Text("Auto") }
-                TextButton(onClick = onResetAll, enabled = !state.params.isDefault) { Text("Restablecer") }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-            Column(
-                Modifier
-                    .height(260.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-            ) {
-                when (group) {
-                    Group.COLOR -> OutlinedButton(
-                        onClick = { picking = !picking },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.padding(top = 8.dp),
-                    ) { Text(if (picking) "Toca un punto gris o blanco…" else "Cuentagotas de balance de blancos") }
-                    Group.CURVE -> CurvePreview(state.params)
-                    Group.HSL -> BandPicker(band, state.params) { band = it }
-                    Group.CROP -> CropPanel(state.params, crop)
-                    else -> Unit
-                }
-                val bandFilter = if (group == Group.HSL) Band.entries[band] else null
-                Adjustment.entries.filter { it.group == group && it.band == bandFilter }.forEach { adj ->
-                    AdjustmentRow(
-                        adjustment = adj,
-                        value = adj.get(state.params),
-                        onChange = { onParam(adj, it) },
-                        onReset = { onResetParam(adj) },
-                    )
-                }
-            }
+            ToolRail(
+                tabs = Group.entries.map { it.icon() to it.label },
+                selected = if (open) tab else -1,
+                onSelect = { i -> if (open && i == tab) open = false else { tab = i; open = true } },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
+
+/** ¿Tiene este grupo algún ajuste distinto del valor por defecto? */
+private fun EditParams.groupChanged(group: Group): Boolean =
+    if (group == Group.CROP) hasGeometry
+    else Adjustment.entries.any { it.group == group && it.get(this) != 0f }
 
 @Composable
 private fun TopBar(state: EditorViewModel.UiState, onHome: () -> Unit, onExport: () -> Unit) {
@@ -248,11 +257,11 @@ private fun TopBar(state: EditorViewModel.UiState, onHome: () -> Unit, onExport:
         Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(start = 8.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
+            .padding(start = 4.dp, end = 14.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onHome) { Text("Inicio") }
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+        IconAction(ToolIcon.BACK, onHome)
+        Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
             Text(
                 state.info?.camera?.ifBlank { state.fileName } ?: state.fileName,
                 style = MaterialTheme.typography.bodyMedium,
@@ -282,47 +291,18 @@ private fun TopBar(state: EditorViewModel.UiState, onHome: () -> Unit, onExport:
                 )
             }
         } else {
-            Button(
-                onClick = onExport,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = ButtonDefaults.ContentPadding,
-            ) { Text("Exportar") }
-        }
-    }
-}
-
-@Composable
-private fun AdjustmentRow(
-    adjustment: Adjustment,
-    value: Float,
-    onChange: (Float) -> Unit,
-    onReset: () -> Unit,
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(adjustment.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            // Tocar el valor lo restablece a 0.
             Text(
-                adjustment.format(value),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (value == 0f) MaterialTheme.colorScheme.onSurfaceVariant
-                else MaterialTheme.colorScheme.primary,
+                "Exportar",
+                color = Color(0xFF1B1405),
+                fontSize = 14.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(onClick = onReset)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                    .clip(RoundedCornerShape(50))
+                    .background(Palette.Accent)
+                    .clickable(onClick = onExport)
+                    .padding(horizontal = 18.dp, vertical = 9.dp),
             )
         }
-        Slider(
-            value = value,
-            onValueChange = onChange,
-            valueRange = adjustment.min..adjustment.max,
-            colors = SliderDefaults.colors(
-                thumbColor = MaterialTheme.colorScheme.primary,
-                activeTrackColor = MaterialTheme.colorScheme.primary,
-                inactiveTrackColor = Palette.SurfaceHigh,
-            ),
-        )
     }
 }
 
@@ -409,37 +389,24 @@ private fun CropPanel(params: EditParams, actions: CropActions) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedButton(onClick = { actions.onRotate(-1) }, shape = RoundedCornerShape(10.dp)) { Text("Girar izq.") }
-            OutlinedButton(onClick = { actions.onRotate(1) }, shape = RoundedCornerShape(10.dp)) { Text("Girar der.") }
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = actions.onReset, enabled = params.hasGeometry) { Text("Quitar") }
+            SoftButton("Girar izq.", { actions.onRotate(-1) })
+            SoftButton("Girar der.", { actions.onRotate(1) })
         }
-        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Enderezar", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             val angle = params.angle
-            // Tocar el valor lo restablece a 0.
             Text(
                 if (angle == 0f) "0°" else String.format(Locale.US, "%+.1f°", angle),
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (angle == 0f) MaterialTheme.colorScheme.onSurfaceVariant
-                else MaterialTheme.colorScheme.primary,
+                color = if (angle == 0f) Palette.TextSecondary else Palette.Accent,
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
                     .clickable { actions.onAngle(0f) }
                     .padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }
-        Slider(
-            value = params.angle,
-            onValueChange = actions.onAngle,
-            valueRange = -EditParams.MAX_ANGLE..EditParams.MAX_ANGLE,
-            colors = SliderDefaults.colors(
-                thumbColor = MaterialTheme.colorScheme.primary,
-                activeTrackColor = MaterialTheme.colorScheme.primary,
-                inactiveTrackColor = Palette.SurfaceHigh,
-            ),
-        )
-        Text("Proporción", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ElegantSlider(params.angle, actions.onAngle, -EditParams.MAX_ANGLE..EditParams.MAX_ANGLE, Modifier.fillMaxWidth())
+        Overline("Proporción", Modifier.padding(top = 6.dp))
         Row(
             Modifier
                 .fillMaxWidth()

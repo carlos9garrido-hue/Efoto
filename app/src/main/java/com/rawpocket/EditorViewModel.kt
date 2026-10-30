@@ -212,6 +212,18 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         onEdited()
     }
 
+    /** Restablece todos los ajustes de una pestaña (un solo paso de deshacer). */
+    fun resetGroup(group: Group) {
+        remember(null)
+        _state.update { st ->
+            var p = st.params
+            if (group == Group.CROP) p = p.withoutGeometry()
+            else Adjustment.entries.filter { it.group == group }.forEach { p = it.set(p, 0f) }
+            st.copy(params = p)
+        }
+        onEdited()
+    }
+
     // ---------------------------------------------------------------- deshacer / rehacer
 
     /** Guarda el estado actual antes de un cambio. [key] agrupa cambios seguidos del mismo control. */

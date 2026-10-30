@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -46,6 +47,7 @@ class ToolActions(
     val onRedo: () -> Unit,
     val onAuto: () -> Unit,
     val onPickWb: (Float, Float) -> Unit,
+    val onResetGroup: (Group) -> Unit,
 )
 
 /**
@@ -116,8 +118,8 @@ fun PhotoCanvas(
                 .padding(8.dp),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
         ) {
-            Chip("↶", enabled = state.canUndo, onClick = tools.onUndo)
-            Chip("↷", enabled = state.canRedo, onClick = tools.onRedo)
+            IconChip(ToolIcon.UNDO, enabled = state.canUndo, onClick = tools.onUndo)
+            IconChip(ToolIcon.REDO, enabled = state.canRedo, onClick = tools.onRedo)
         }
         Row(
             Modifier
@@ -125,10 +127,22 @@ fun PhotoCanvas(
                 .padding(8.dp),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
         ) {
-            Chip("Dividir", selected = split, onClick = { split = !split })
+            IconChip(ToolIcon.SPLIT, selected = split, onClick = { split = !split })
             Chip("Original", modifier = Modifier.holdToCompareChip(onHoldOriginal))
         }
     }
+}
+
+@Composable
+private fun IconChip(icon: ToolIcon, enabled: Boolean = true, selected: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (selected) Palette.Accent.copy(alpha = 0.85f) else Palette.Background.copy(alpha = 0.7f))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { IconGlyph(icon, if (selected) Color(0xFF1B1405) else Palette.TextPrimary.copy(alpha = if (enabled) 1f else 0.35f), Modifier.size(20.dp)) }
 }
 
 @Composable
