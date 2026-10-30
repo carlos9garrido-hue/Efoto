@@ -135,6 +135,10 @@ int openSession(const std::string& path, int previewLongEdge, std::unique_ptr<Se
     int target = previewLongEdge > 0 ? previewLongEdge : 2048;
     int step = std::max(1, (longEdge + target - 1) / target);
     boxDownsample16(dec.data(), dec.width(), dec.height(), step, s->preview, s->pw, s->ph);
+    {
+        int smallStep = std::max(1, (std::max(s->pw, s->ph) + 511) / 512);
+        boxDownsample16(s->preview.data(), s->pw, s->ph, smallStep, s->small, s->sw, s->sh);
+    }
     s->info = dec.info;
     out = std::move(s);
     return 0;

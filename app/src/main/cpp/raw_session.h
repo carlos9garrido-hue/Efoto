@@ -18,6 +18,8 @@ struct Session {
     std::string path;
     std::vector<uint16_t> preview;  // RGB16 lineal, orientación aplicada
     int pw = 0, ph = 0;
+    std::vector<uint16_t> small;  // vista previa reducida (~512 px) para histograma y análisis
+    int sw = 0, sh = 0;
     std::string info;  // make|model|iso|shutter|aperture|focal|fullW|fullH
 };
 

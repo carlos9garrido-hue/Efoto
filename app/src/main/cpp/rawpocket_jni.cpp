@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "analysis.h"
 #include "develop.h"
 #include "raw_session.h"
 
@@ -85,6 +86,52 @@ Java_com_rawpocket_RawNative_nativeThumbnail(JNIEnv* env, jobject, jlong h, jstr
     auto* s = lookup(h);
     if (!s || !jpath) return rp::kErrBadArgs;
     return rp::exportThumbnail(*s, toStd(env, jpath), edge, 85);
+}
+
+// Histograma 4x256 (R, G, B, luminancia) de la foto revelada con `params`.
+JNIEXPORT jboolean JNICALL
+Java_com_rawpocket_RawNative_nativeHistogram(JNIEnv* env, jobject, jlong h, jfloatArray jparams,
+                                             jintArray jout) {
+    auto* s = lookup(h);
+    if (!s || !jparams || !jout || s->small.empty()) return JNI_FALSE;
+    if (env->GetArrayLength(jparams) < rp::Params::kCount || env->GetArrayLength(jout) < 1024)
+        return JNI_FALSE;
+    float p[rp::Params::kCount];
+    env->GetFloatArrayRegion(jparams, 0, rp::Params::kCount, p);
+    int32_t bins[1024];
+    rp::histogram8(s->small.data(), s->sw, s->sh, rp::Params::fromArray(p), bins);
+    env->SetIntArrayRegion(jout, 0, 1024, reinterpret_cast<const jint*>(bins));
+    return JNI_TRUE;
+}
+
+// Ajuste automático: out = {exposición, contraste, luces, sombras, blancos, negros}.
+JNIEXPORT jboolean JNICALL
+Java_com_rawpocket_RawNative_nativeAuto(JNIEnv* env, jobject, jlong h, jfloatArray jout) {
+    auto* s = lookup(h);
+    if (!s || !jout || s->small.empty() || env->GetArrayLength(jout) < 6) return JNI_FALSE;
+    float out[6];
+    rp::autoAdjust(s->small.data(), s->sw, s->sh, out);
+    env->SetFloatArrayRegion(jout, 0, 6, out);
+    return JNI_TRUE;
+}
+
+// Cuentagotas: (u, v) sobre la imagen girada/recortada -> out = {temperatura, matiz}.
+JNIEXPORT jboolean JNICALL
+Java_com_rawpocket_RawNative_nativeSampleWb(JNIEnv* env, jobject, jlong h, jfloatArray jparams,
+                                            jfloat u, jfloat v, jfloatArray jout) {
+    auto* s = lookup(h);
+    if (!s || !jparams || !jout || s->small.empty() || env->GetArrayLength(jout) < 2) return JNI_FALSE;
+    if (env->GetArrayLength(jparams) < rp::Params::kCount) return JNI_FALSE;
+    float p[rp::Params::kCount];
+    env->GetFloatArrayRegion(jparams, 0, rp::Params::kCount, p);
+    float rgb[3];
+    if (!rp::samplePatchLinear(s->small.data(), s->sw, s->sh, rp::Params::fromArray(p), u, v, rgb))
+        return JNI_FALSE;
+    float t, tint;
+    if (!rp::whiteBalanceFromRgb(rgb[0], rgb[1], rgb[2], t, tint)) return JNI_FALSE;
+    float out[2] = {t, tint};
+    env->SetFloatArrayRegion(jout, 0, 2, out);
+    return JNI_TRUE;
 }
 
 JNIEXPORT jstring JNICALL

@@ -36,6 +36,10 @@ add_executable(test_image
 target_include_directories(test_image PRIVATE ${CPP} ${CPP}/third_party/stb)
 target_link_libraries(test_image raw_static Threads::Threads)
 
+add_executable(test_analysis test_analysis.cpp ${CPP}/develop.cpp ${CPP}/analysis.cpp)
+target_include_directories(test_analysis PRIVATE ${CPP})
+target_link_libraries(test_analysis Threads::Threads)
+
 # Volcador del motor CPU para la prueba de paridad CPU/GPU (native-tests/gpu/parity.js).
 add_executable(dump_cpu dump_cpu.cpp ${CPP}/develop.cpp)
 target_include_directories(dump_cpu PRIVATE ${CPP})
@@ -54,3 +58,4 @@ add_test(NAME pipeline
 set_tests_properties(pipeline PROPERTIES DEPENDS "make_dng_normal;make_dng_o6")
 
 add_test(NAME imagenes_jpg_png COMMAND test_image ${CMAKE_BINARY_DIR})
+add_test(NAME analisis COMMAND test_analysis)

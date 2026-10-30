@@ -97,6 +97,15 @@ class Adjustment private constructor(
             }
         }
 
+        val EXPOSURE: Adjustment = entries[0]
+        val CONTRAST: Adjustment = entries[1]
+        val HIGHLIGHTS: Adjustment = entries[2]
+        val SHADOWS: Adjustment = entries[3]
+        val WHITES: Adjustment = entries[4]
+        val BLACKS: Adjustment = entries[5]
+        val TEMPERATURE: Adjustment = entries[6]
+        val TINT: Adjustment = entries[7]
+
         /** Posición de la banda dentro de `values` (para saber si tiene ediciones). */
         fun bandRange(bandIndex: Int): IntRange = (HSL_START + bandIndex * 3)..(HSL_START + bandIndex * 3 + 2)
     }

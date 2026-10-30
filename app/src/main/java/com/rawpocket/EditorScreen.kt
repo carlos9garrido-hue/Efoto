@@ -75,6 +75,7 @@ fun EditorScreen(
     onResetParam: (Adjustment) -> Unit,
     onResetAll: () -> Unit,
     crop: CropActions,
+    tools: ToolActions,
     onHoldOriginal: (Boolean) -> Unit,
     onExport: () -> Unit,
     onMessageShown: () -> Unit,
@@ -100,7 +101,7 @@ fun EditorScreen(
             EditorViewModel.Status.LOADING -> LoadingScreen()
             EditorViewModel.Status.ERROR -> ErrorScreen(state.error.orEmpty(), onHome)
             EditorViewModel.Status.READY -> ReadyScreen(
-                state, onHome, onParam, onResetParam, onResetAll, crop, onHoldOriginal, onExport,
+                state, onHome, onParam, onResetParam, onResetAll, crop, tools, onHoldOriginal, onExport,
             )
         }
         SnackbarHost(
@@ -153,43 +154,32 @@ private fun ReadyScreen(
     onResetParam: (Adjustment) -> Unit,
     onResetAll: () -> Unit,
     crop: CropActions,
+    tools: ToolActions,
     onHoldOriginal: (Boolean) -> Unit,
     onExport: () -> Unit,
 ) {
     var group by rememberSaveable { mutableStateOf(Group.LIGHT) }
     var band by rememberSaveable { mutableStateOf(0) }  // banda de color seleccionada en HSL
+    var picking by remember { mutableStateOf(false) }   // cuentagotas de balance de blancos activo
 
     Column(Modifier.fillMaxSize()) {
         TopBar(state, onHome, onExport)
 
-        // Foto: mantener pulsada para ver el original.
-        Box(
-            Modifier
+        // Foto con zoom, comparación, histograma y cuentagotas.
+        val shown = if (state.showOriginal) EditParams() else state.params
+        val gpuParams = remember(shown) { shown.toFloatArray() }
+        PhotoCanvas(
+            state = state,
+            gpuParams = gpuParams,
+            tools = tools,
+            picking = picking,
+            onPickingDone = { picking = false },
+            onHoldOriginal = onHoldOriginal,
+            modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            // Con la foto original (pulsación larga) se usan ajustes en cero.
-            val shown = if (state.showOriginal) EditParams() else state.params
-            val gpuParams = remember(shown) { shown.toFloatArray() }
-            GpuPreview(photo = state.photo, params = gpuParams, modifier = Modifier.fillMaxSize())
-            // Capa transparente que recibe el gesto: la SurfaceView de GL no debe tragarse los toques.
-            Box(Modifier.fillMaxSize().holdToCompare(onHoldOriginal))
-            if (state.showOriginal) {
-                Text(
-                    "ORIGINAL",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.TextPrimary,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 8.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(Palette.Background.copy(alpha = 0.7f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                )
-            }
-        }
+        )
 
         // Panel de controles.
         Column(
@@ -217,6 +207,7 @@ private fun ReadyScreen(
                         }
                     }
                 }
+                TextButton(onClick = tools.onAuto) { Text("Auto") }
                 TextButton(onClick = onResetAll, enabled = !state.params.isDefault) { Text("Restablecer") }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
@@ -227,6 +218,11 @@ private fun ReadyScreen(
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
                 when (group) {
+                    Group.COLOR -> OutlinedButton(
+                        onClick = { picking = !picking },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) { Text(if (picking) "Toca un punto gris o blanco…" else "Cuentagotas de balance de blancos") }
                     Group.CURVE -> CurvePreview(state.params)
                     Group.HSL -> BandPicker(band, state.params) { band = it }
                     Group.CROP -> CropPanel(state.params, crop)
@@ -469,16 +465,3 @@ private fun CropPanel(params: EditParams, actions: CropActions) {
 }
 
 // ------------------------------------------------------------------ utilidades
-
-/** Mientras el dedo está sobre la foto se notifica `true`; al soltarlo (o cancelarse el gesto), `false`. */
-private fun Modifier.holdToCompare(onHold: (Boolean) -> Unit): Modifier = composed {
-    val callback by rememberUpdatedState(onHold)
-    pointerInput(Unit) {
-        awaitEachGesture {
-            awaitFirstDown(requireUnconsumed = false)
-            callback(true)
-            waitForUpOrCancellation()
-            callback(false)
-        }
-    }
-}

@@ -39,6 +39,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         /** Vista previa en formato GPU; el revelado lo hace el shader, no la CPU. */
         val photo: GpuPhoto? = null,
         val showOriginal: Boolean = false,
+        val canUndo: Boolean = false,
+        val canRedo: Boolean = false,
+        /** Histograma 4x256 (R, G, B, luminancia) de la foto revelada. */
+        val histogram: IntArray? = null,
         val exporting: Boolean = false,
         /** Aviso breve para mostrar en un Snackbar. */
         val message: String? = null,
@@ -61,6 +65,14 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile
     private var editKey: String? = null
     private var saveJob: Job? = null
+    private var histJob: Job? = null
+
+    // Historial de ediciones. Los cambios seguidos del mismo control (arrastrar un deslizador)
+    // se agrupan en un solo paso de deshacer.
+    private val undoStack = ArrayDeque<EditParams>()
+    private val redoStack = ArrayDeque<EditParams>()
+    private var lastEditKey = -1
+    private var lastEditTime = 0L
 
     // ---------------------------------------------------------------- abrir
 
@@ -70,6 +82,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = UiState(status = Status.LOADING)
             val result = withContext(Dispatchers.Default) { lock.withLock { openLocked(uri) } }
             _state.value = result
+            if (result.status == Status.READY) refreshHistogram()
             if (result.status == Status.ERROR) {
                 _recents.value = RecentList.remove(_recents.value, uri.toString())
                 saveRecents()
@@ -81,6 +94,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     fun closePhoto() {
         if (_state.value.status == Status.LOADING) return
         _state.value = UiState()
+        clearHistory()
         viewModelScope.launch(Dispatchers.Default) { lock.withLock { closeLocked() } }
     }
 
@@ -140,6 +154,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         editKey = key
         rememberRecent(uri, name, key, h)
         val params = loadEdits(key) ?: EditParams()
+        clearHistory()
 
         return UiState(
             status = Status.READY,
@@ -174,17 +189,134 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- edición
 
     fun setParam(adjustment: Adjustment, value: Float) {
+        remember(adjustment.index)
         _state.update {
             it.copy(params = adjustment.set(it.params, value.coerceIn(adjustment.min, adjustment.max)))
         }
-        scheduleSave()
+        onEdited()
     }
 
-    fun resetParam(adjustment: Adjustment) = setParam(adjustment, 0f)
+    fun resetParam(adjustment: Adjustment) {
+        remember(null)
+        setParam(adjustment, 0f)
+    }
 
     fun resetAll() {
+        remember(null)
         _state.update { it.copy(params = EditParams()) }
+        onEdited()
+    }
+
+    // ---------------------------------------------------------------- deshacer / rehacer
+
+    /** Guarda el estado actual antes de un cambio. [key] agrupa cambios seguidos del mismo control. */
+    private fun remember(key: Int?) {
+        val now = System.currentTimeMillis()
+        val merge = key != null && key == lastEditKey && now - lastEditTime < MERGE_MS
+        lastEditKey = key ?: -1
+        lastEditTime = now
+        if (merge) return
+        undoStack.addLast(_state.value.params)
+        if (undoStack.size > HISTORY_LIMIT) undoStack.removeFirst()
+        redoStack.clear()
+        syncHistoryFlags()
+    }
+
+    private fun syncHistoryFlags() {
+        _state.update { it.copy(canUndo = undoStack.isNotEmpty(), canRedo = redoStack.isNotEmpty()) }
+    }
+
+    fun undo() {
+        val previous = undoStack.removeLastOrNull() ?: return
+        redoStack.addLast(_state.value.params)
+        lastEditKey = -1
+        _state.update { it.copy(params = previous) }
+        syncHistoryFlags()
+        onEdited()
+    }
+
+    fun redo() {
+        val next = redoStack.removeLastOrNull() ?: return
+        undoStack.addLast(_state.value.params)
+        lastEditKey = -1
+        _state.update { it.copy(params = next) }
+        syncHistoryFlags()
+        onEdited()
+    }
+
+    private fun clearHistory() {
+        undoStack.clear(); redoStack.clear(); lastEditKey = -1
+    }
+
+    // ---------------------------------------------------------------- automático y cuentagotas
+
+    /** Aplica el ajuste automático (exposición, contraste, luces, sombras, blancos y negros). */
+    fun autoAdjust() {
+        if (_state.value.status != Status.READY) return
+        viewModelScope.launch {
+            val out = FloatArray(6)
+            val ok = withContext(Dispatchers.Default) {
+                lock.withLock { handle > 0L && RawNative.nativeAuto(handle, out) }
+            }
+            if (!ok) return@launch
+            remember(null)
+            val targets = listOf(
+                Adjustment.EXPOSURE, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS,
+                Adjustment.SHADOWS, Adjustment.WHITES, Adjustment.BLACKS,
+            )
+            _state.update { st ->
+                var p = st.params
+                targets.forEachIndexed { i, adj -> p = adj.set(p, out[i].coerceIn(adj.min, adj.max)) }
+                st.copy(params = p)
+            }
+            onEdited()
+        }
+    }
+
+    /** Cuentagotas: toma el punto (u, v) de la foto mostrada como gris neutro. */
+    fun pickWhiteBalance(u: Float, v: Float) {
+        if (_state.value.status != Status.READY) return
+        val params = _state.value.params
+        viewModelScope.launch {
+            val out = FloatArray(2)
+            val ok = withContext(Dispatchers.Default) {
+                lock.withLock { handle > 0L && RawNative.nativeSampleWb(handle, params.toFloatArray(), u, v, out) }
+            }
+            if (!ok) {
+                _state.update { it.copy(message = "No se pudo medir ese punto.") }
+                return@launch
+            }
+            remember(null)
+            _state.update { st ->
+                val p = Adjustment.TEMPERATURE.set(
+                    Adjustment.TINT.set(st.params, out[1].coerceIn(Adjustment.TINT.min, Adjustment.TINT.max)),
+                    out[0].coerceIn(Adjustment.TEMPERATURE.min, Adjustment.TEMPERATURE.max),
+                )
+                st.copy(params = p)
+            }
+            onEdited()
+        }
+    }
+
+    // ---------------------------------------------------------------- histograma
+
+    private fun refreshHistogram() {
+        histJob?.cancel()
+        histJob = viewModelScope.launch {
+            delay(50)  // si siguen llegando cambios, solo se calcula el último
+            val params = _state.value.params.toFloatArray()
+            val bins = IntArray(1024)
+            val ok = withContext(Dispatchers.Default) {
+                lock.withLock { handle > 0L && RawNative.nativeHistogram(handle, params, bins) }
+            }
+            if (ok) _state.update { it.copy(histogram = bins) }
+        }
+    }
+
+    /** Todo cambio de ediciones: guarda en disco y actualiza el histograma. */
+    private fun onEdited() {
         scheduleSave()
+        refreshHistogram()
     }
 
     /** Mantener pulsada la foto muestra el original sin ediciones. */
@@ -196,29 +328,31 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- geometría
 
     /** Enderezado en grados (-45..45). El recorte se ajusta solo para no dejar esquinas vacías. */
-    fun setAngle(degrees: Float) = editGeometry { p, w, h ->
+    fun setAngle(degrees: Float) = editGeometry(GEO_ANGLE_KEY) { p, w, h ->
         p.withGeometry(p.rotation, degrees, p.aspect, w, h)
     }
 
     /** Gira la foto en pasos de 90° (+1 = horario, -1 = antihorario). */
-    fun rotate(quarterTurns: Int) = editGeometry { p, w, h ->
+    fun rotate(quarterTurns: Int) = editGeometry(null) { p, w, h ->
         p.withGeometry(p.rotation + quarterTurns, p.angle, p.aspect, w, h)
     }
 
-    fun setAspect(index: Int) = editGeometry { p, w, h ->
+    fun setAspect(index: Int) = editGeometry(null) { p, w, h ->
         p.withGeometry(p.rotation, p.angle, index, w, h)
     }
 
     /** Quita giro, enderezado y recorte; conserva el resto de las ediciones. */
     fun resetGeometry() {
+        remember(null)
         _state.update { it.copy(params = it.params.withoutGeometry()) }
-        scheduleSave()
+        onEdited()
     }
 
-    private fun editGeometry(change: (EditParams, Int, Int) -> EditParams) {
+    private fun editGeometry(key: Int?, change: (EditParams, Int, Int) -> EditParams) {
         val photo = _state.value.photo ?: return
+        remember(key)
         _state.update { it.copy(params = change(it.params, photo.width, photo.height)) }
-        scheduleSave()
+        onEdited()
     }
 
     fun consumeMessage() {
@@ -315,6 +449,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         const val PREVIEW_LONG_EDGE = 2048
         const val EXPORT_QUALITY = 95
         const val THUMB_EDGE = 320
+        const val MERGE_MS = 1000L
+        const val HISTORY_LIMIT = 60
+        const val GEO_ANGLE_KEY = 100000
     }
 }
 

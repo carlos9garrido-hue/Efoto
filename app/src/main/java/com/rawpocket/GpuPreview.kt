@@ -16,11 +16,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
  * fotograma: no hay copias de píxeles entre CPU y GPU mientras se mueven los controles.
  */
 @Composable
-fun GpuPreview(photo: GpuPhoto?, params: FloatArray, modifier: Modifier = Modifier) {
+fun GpuPreview(photo: GpuPhoto?, params: FloatArray, view: PreviewView, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val renderer = remember { DevelopRenderer(context.applicationContext) }
+    val renderer = remember { DevelopRenderer(context.applicationContext, view) }
     val glView = remember {
         GLSurfaceView(context).apply {
             setEGLContextClientVersion(3)
@@ -28,6 +28,11 @@ fun GpuPreview(photo: GpuPhoto?, params: FloatArray, modifier: Modifier = Modifi
             setRenderer(renderer)
             renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY  // solo se dibuja cuando algo cambia
         }
+    }
+
+    DisposableEffect(view, glView) {
+        view.invalidate = { glView.requestRender() }
+        onDispose { view.invalidate = {} }
     }
 
     // El hilo de GL se pausa y reanuda con la actividad.

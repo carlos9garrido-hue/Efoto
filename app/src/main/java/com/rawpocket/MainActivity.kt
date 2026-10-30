@@ -49,6 +49,12 @@ class MainActivity : ComponentActivity() {
                         onAspect = viewModel::setAspect,
                         onReset = viewModel::resetGeometry,
                     ),
+                    tools = ToolActions(
+                        onUndo = viewModel::undo,
+                        onRedo = viewModel::redo,
+                        onAuto = viewModel::autoAdjust,
+                        onPickWb = viewModel::pickWhiteBalance,
+                    ),
                     onHoldOriginal = viewModel::setShowOriginal,
                     onExport = viewModel::export,
                     onMessageShown = viewModel::consumeMessage,

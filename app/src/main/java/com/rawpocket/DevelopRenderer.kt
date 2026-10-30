@@ -20,7 +20,7 @@ class GpuPhoto(val width: Int, val height: Int, val data: ByteBuffer)
  * Dibuja la foto aplicando el revelado en un fragment shader (assets/shaders/develop.frag).
  * El shader replica Developer::pixel() de C++, que es lo que usa la exportación a resolución completa.
  */
-class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
+class DevelopRenderer(private val context: Context, private val view: PreviewView) : GLSurfaceView.Renderer {
 
     /** Se asignan desde el hilo principal y se leen en el hilo de GL. */
     @Volatile var photo: GpuPhoto? = null
@@ -78,7 +78,8 @@ class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
         }
 
         // La imagen final es la foto girada y recortada: su tamaño (como en outputSize() de C++)
-        // decide el encuadre. Ajuste "contain": entera, centrada, sin deformarse.
+        // decide el encuadre. Ajuste "contain": entera, centrada, sin deformarse; el zoom y el
+        // desplazamiento agrandan y mueven ese rectángulo (lo que sobresale lo recorta la pantalla).
         val values = params
         val turns = Math.floor(values[ANGLE_INDEX + 1] + 0.5).toInt() and 3
         val frameW = (if (turns and 1 == 1) p.height else p.width).toFloat()
@@ -89,14 +90,44 @@ class DevelopRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val scale = min(surfaceWidth / outW, surfaceHeight / outH)
         val w = (outW * scale).roundToInt().coerceIn(1, surfaceWidth)
         val h = (outH * scale).roundToInt().coerceIn(1, surfaceHeight)
-        GLES30.glViewport((surfaceWidth - w) / 2, (surfaceHeight - h) / 2, w, h)
+        view.surfW = surfaceWidth
+        view.surfH = surfaceHeight
+        view.fitW = w.toFloat()
+        view.fitH = h.toFloat()
+        view.clampPan()
+        val zoom = view.zoom
+        val vw = (w * zoom).roundToInt().coerceAtLeast(1)
+        val vh = (h * zoom).roundToInt().coerceAtLeast(1)
+        val vx = (surfaceWidth / 2f + view.panX - vw / 2f).roundToInt()
+        val vy = (surfaceHeight - (surfaceHeight / 2f + view.panY) - vh / 2f).roundToInt()
+        GLES30.glViewport(vx, vy, vw, vh)
 
         GLES30.glUseProgram(program)
-        GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, values, 0)
         // cos/sin del enderezado en doble precisión (la GPU solo garantiza 2^-11 de error)
         val angle = Math.toRadians(values[ANGLE_INDEX].toDouble())
         GLES30.glUniform2f(rotLocation, Math.cos(angle).toFloat(), Math.sin(angle).toFloat())
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+
+        if (view.splitOn) {
+            // Comparación dividida: a la izquierda la foto sin ajustes (con la misma geometría),
+            // a la derecha la editada. Cada mitad se dibuja recortada con scissor.
+            val original = values.copyOf().also { for (i in 0 until ANGLE_INDEX) it[i] = 0f }
+            val divX = (vx + view.splitFrac * vw).roundToInt().coerceIn(0, surfaceWidth)
+            GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+            GLES30.glScissor(0, 0, divX, surfaceHeight)
+            GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, original, 0)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+            GLES30.glScissor(divX, 0, surfaceWidth - divX, surfaceHeight)
+            GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, values, 0)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+            // Línea divisoria de 3 px.
+            GLES30.glScissor((divX - 1).coerceAtLeast(0), 0, 3, surfaceHeight)
+            GLES30.glClearColor(1f, 1f, 1f, 1f)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        } else {
+            GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, values, 0)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        }
     }
 
     // ---------------------------------------------------------------- shaders

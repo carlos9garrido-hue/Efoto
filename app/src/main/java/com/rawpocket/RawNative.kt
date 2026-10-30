@@ -24,6 +24,15 @@ object RawNative {
     /** Guarda una miniatura JPEG (lado largo [edge]) de la foto sin editar. Devuelve 0 o un error. */
     external fun nativeThumbnail(handle: Long, outPath: String, edge: Int): Int
 
+    /** Histograma 4x256 (R, G, B, luminancia) de la foto revelada con [params]. */
+    external fun nativeHistogram(handle: Long, params: FloatArray, out: IntArray): Boolean
+
+    /** Ajuste automático: out = exposición, contraste, luces, sombras, blancos, negros. */
+    external fun nativeAuto(handle: Long, out: FloatArray): Boolean
+
+    /** Cuentagotas: (u, v) sobre la imagen girada y recortada -> out = temperatura, matiz. */
+    external fun nativeSampleWb(handle: Long, params: FloatArray, u: Float, v: Float, out: FloatArray): Boolean
+
     external fun nativeErrorText(code: Int): String
 
     /**
