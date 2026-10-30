@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
                 val recents by viewModel.recents.collectAsStateWithLifecycle()
                 val presets by viewModel.presets.collectAsStateWithLifecycle()
                 val canPaste by viewModel.canPaste.collectAsStateWithLifecycle()
+                val batch by viewModel.batch.collectAsStateWithLifecycle()
                 val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) openUri(uri)
                 }
@@ -66,6 +67,12 @@ class MainActivity : ComponentActivity() {
                         onDelete = viewModel::deletePreset,
                         onCopy = viewModel::copySettings,
                         onPaste = viewModel::pasteSettings,
+                    ),
+                    batch = batch,
+                    batchActions = BatchActions(
+                        onExport = viewModel::exportBatch,
+                        onCancel = viewModel::cancelBatch,
+                        onDismiss = viewModel::dismissBatch,
                     ),
                     onHoldOriginal = viewModel::setShowOriginal,
                     onExport = viewModel::export,

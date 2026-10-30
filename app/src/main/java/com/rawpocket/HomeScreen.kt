@@ -7,7 +7,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,7 +60,18 @@ fun HomeScreen(
     onPick: () -> Unit,
     onOpenRecent: (RecentItem) -> Unit,
     onRemoveRecent: (RecentItem) -> Unit,
+    onExportSelected: (List<RecentItem>, ExportOptions) -> Unit,
 ) {
+    // Selección múltiple: se entra con una pulsación larga sobre una foto.
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var askExport by remember { mutableStateOf(false) }
+    val selecting = selected.isNotEmpty()
+    BackHandler(enabled = selecting) { selected = emptySet() }
+    // Si una foto desaparece de recientes, deja de estar seleccionada.
+    val valid = recents.map { it.uri }.toSet()
+    if (selected.any { it !in valid }) selected = selected.filter { it in valid }.toSet()
+
+    Box(Modifier.fillMaxSize()) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 104.dp),
         modifier = Modifier
@@ -123,14 +139,66 @@ fun HomeScreen(
                 )
             }
             items(recents, key = { it.uri }) { item ->
-                RecentTile(item, thumbDir, onClick = { onOpenRecent(item) }, onRemove = { onRemoveRecent(item) })
+                RecentTile(
+                    item, thumbDir,
+                    selecting = selecting,
+                    selected = item.uri in selected,
+                    onClick = {
+                        if (selecting) selected = if (item.uri in selected) selected - item.uri else selected + item.uri
+                        else onOpenRecent(item)
+                    },
+                    onLongClick = { selected = selected + item.uri },
+                    onRemove = { onRemoveRecent(item) },
+                )
             }
         }
     }
+
+    if (selecting) {
+        Row(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(16.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Palette.SurfaceHigh)
+                .border(1.dp, Palette.Outline, RoundedCornerShape(50))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            IconAction(ToolIcon.CLOSE, { selected = emptySet() })
+            Text("${selected.size} seleccionadas", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 6.dp))
+            SoftButton("Todas", { selected = recents.map { it.uri }.toSet() })
+            SoftButton("Exportar", { askExport = true }, accent = true)
+        }
+    }
+    if (askExport) {
+        ExportDialog(
+            title = "Exportar ${selected.size} fotos",
+            onDismiss = { askExport = false },
+            onConfirm = { opts ->
+                askExport = false
+                val items = recents.filter { it.uri in selected }
+                selected = emptySet()
+                onExportSelected(items, opts)
+            },
+        )
+    }
+    }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun RecentTile(item: RecentItem, thumbDir: File, onClick: () -> Unit, onRemove: () -> Unit) {
+private fun RecentTile(
+    item: RecentItem,
+    thumbDir: File,
+    selecting: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onRemove: () -> Unit,
+) {
     val bitmap by produceState<Bitmap?>(null, item.thumb) {
         value = item.thumb?.let { name ->
             withContext(Dispatchers.IO) { runCatching { BitmapFactory.decodeFile(File(thumbDir, name).path) }.getOrNull() }
@@ -142,7 +210,8 @@ private fun RecentTile(item: RecentItem, thumbDir: File, onClick: () -> Unit, on
             .aspectRatio(1f)
             .clip(RoundedCornerShape(14.dp))
             .background(Palette.SurfaceHigh)
-            .clickable(onClick = onClick),
+            .then(if (selected) Modifier.border(2.dp, Palette.Accent, RoundedCornerShape(14.dp)) else Modifier)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
         val b = bitmap
         if (b != null) {
@@ -176,15 +245,28 @@ private fun RecentTile(item: RecentItem, thumbDir: File, onClick: () -> Unit, on
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .padding(6.dp)
-                .size(26.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.45f))
-                .clickable(onClick = onRemove),
-            contentAlignment = Alignment.Center,
-        ) { IconGlyph(ToolIcon.CLOSE, Palette.TextPrimary, Modifier.size(12.dp)) }
+        if (selecting) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(if (selected) Palette.Accent else Color.Black.copy(alpha = 0.45f))
+                    .border(1.5.dp, if (selected) Palette.Accent else Palette.TextPrimary, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { if (selected) IconGlyph(ToolIcon.CHECK, Color(0xFF1B1405), Modifier.size(14.dp)) }
+        } else {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) { IconGlyph(ToolIcon.CLOSE, Palette.TextPrimary, Modifier.size(12.dp)) }
+        }
     }
 }

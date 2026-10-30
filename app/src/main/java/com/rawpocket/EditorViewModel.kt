@@ -469,7 +469,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- exportar
 
     /** Revela la foto a resolución completa y guarda un JPEG en Pictures/Efoto. */
-    fun export() {
+    fun export(options: ExportOptions = ExportOptions()) {
         val s = _state.value
         if (s.status != Status.READY || s.exporting) return
         _state.update { it.copy(exporting = true) }
@@ -483,7 +483,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     if (h <= 0L) return@withLock "No hay ninguna foto abierta."
                     val tmp = File(getApplication<Application>().cacheDir, "export.jpg")
                     try {
-                        val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, EXPORT_QUALITY, 0)
+                        val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, options.quality, options.maxEdge)
                         if (rc != 0) return@withLock "No se pudo exportar: ${RawNative.nativeErrorText(rc)}"
                         saveToGallery(tmp, "${baseName}_Efoto.jpg")
                     } catch (e: Exception) {
@@ -494,6 +494,60 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             _state.update { it.copy(exporting = false, message = message) }
+        }
+    }
+
+    // ---------------------------------------------------------------- exportación por lotes
+
+    private val _batch = MutableStateFlow<BatchState?>(null)
+    val batch: StateFlow<BatchState?> = _batch.asStateFlow()
+    private var batchJob: Job? = null
+
+    /** Exporta varias fotos recientes con sus ediciones guardadas, una tras otra. Solo desde el inicio. */
+    fun exportBatch(items: List<RecentItem>, options: ExportOptions) {
+        if (items.isEmpty() || batchJob?.isActive == true || _state.value.status != Status.EMPTY) return
+        batchJob = viewModelScope.launch {
+            var failed = 0
+            for ((i, item) in items.withIndex()) {
+                _batch.value = BatchState(items.size, i, item.name, failed)
+                val ok = withContext(Dispatchers.Default) { exportOne(item, options) }
+                if (!ok) failed++
+            }
+            _batch.value = BatchState(items.size, items.size, failed = failed, finished = true)
+        }
+    }
+
+    fun cancelBatch() {
+        batchJob?.cancel()
+        _batch.value = null
+        _state.update { it.copy(message = "Exportación cancelada.") }
+    }
+
+    fun dismissBatch() {
+        _batch.value = null
+    }
+
+    private fun exportOne(item: RecentItem, options: ExportOptions): Boolean {
+        val app = getApplication<Application>()
+        val src = File(app.cacheDir, "batch.src")
+        val tmp = File(app.cacheDir, "batch_out.jpg")
+        var h = 0L
+        try {
+            val input = app.contentResolver.openInputStream(Uri.parse(item.uri)) ?: return false
+            input.use { i -> src.outputStream().use { o -> i.copyTo(o) } }
+            h = RawNative.nativeOpen(src.absolutePath, BATCH_PREVIEW_EDGE)
+            if (h <= 0L) return false
+            val params = loadEdits(editKeyFor(item.name, src.length())) ?: EditParams()
+            val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, options.quality, options.maxEdge)
+            if (rc != 0) return false
+            saveToGallery(tmp, "${item.name.substringBeforeLast('.', item.name)}_Efoto.jpg")
+            return true
+        } catch (e: Exception) {
+            return false
+        } finally {
+            if (h > 0L) RawNative.nativeClose(h)
+            src.delete()
+            tmp.delete()
         }
     }
 
@@ -556,6 +610,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         const val PREVIEW_LONG_EDGE = 2048
         const val EXPORT_QUALITY = 95
         const val THUMB_EDGE = 320
+        const val BATCH_PREVIEW_EDGE = 256
         const val MERGE_MS = 1000L
         const val EFFECT_FIRST = Adjustment.FX_START  // claridad .. ruido (color)
         const val EFFECT_LAST = Adjustment.FX_START + 5

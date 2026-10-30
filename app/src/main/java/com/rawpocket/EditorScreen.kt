@@ -80,8 +80,10 @@ fun EditorScreen(
     presets: List<Preset>,
     canPaste: Boolean,
     presetActions: PresetActions,
+    batch: BatchState?,
+    batchActions: BatchActions,
     onHoldOriginal: (Boolean) -> Unit,
-    onExport: () -> Unit,
+    onExport: (ExportOptions) -> Unit,
     onMessageShown: () -> Unit,
 ) {
     // Atrás en el editor o en un error vuelve al inicio en lugar de cerrar la app.
@@ -101,13 +103,14 @@ fun EditorScreen(
             .background(Palette.Background)
     ) {
         when (state.status) {
-            EditorViewModel.Status.EMPTY -> HomeScreen(recents, thumbDir, onPick, onOpenRecent, onRemoveRecent)
+            EditorViewModel.Status.EMPTY -> HomeScreen(recents, thumbDir, onPick, onOpenRecent, onRemoveRecent, batchActions.onExport)
             EditorViewModel.Status.LOADING -> LoadingScreen()
             EditorViewModel.Status.ERROR -> ErrorScreen(state.error.orEmpty(), onHome)
             EditorViewModel.Status.READY -> ReadyScreen(
                 state, onHome, onParam, onResetParam, onResetAll, crop, tools, presets, canPaste, presetActions, onHoldOriginal, onExport,
             )
         }
+        if (batch != null) BatchProgressDialog(batch, batchActions.onCancel, batchActions.onDismiss)
         SnackbarHost(
             hostState = snackbar,
             modifier = Modifier
@@ -163,8 +166,10 @@ private fun ReadyScreen(
     canPaste: Boolean,
     presetActions: PresetActions,
     onHoldOriginal: (Boolean) -> Unit,
-    onExport: () -> Unit,
+    onExport: (ExportOptions) -> Unit,
 ) {
+    var askExport by remember { mutableStateOf(false) }
+    if (askExport) ExportDialog("Exportar foto", { askExport = false }, { askExport = false; onExport(it) })
     var tab by rememberSaveable { mutableStateOf(0) }       // herramienta seleccionada
     var open by rememberSaveable { mutableStateOf(true) }   // panel desplegado o recogido
     var band by rememberSaveable { mutableStateOf(0) }      // banda de color seleccionada en HSL
@@ -174,7 +179,7 @@ private fun ReadyScreen(
     val group = Group.entries[tab.coerceIn(0, Group.entries.size - 1)]
 
     Column(Modifier.fillMaxSize()) {
-        TopBar(state, onHome, onExport)
+        TopBar(state, onHome) { askExport = true }
 
         // Foto con zoom, comparación, histograma y cuentagotas.
         val shown = if (state.showOriginal) EditParams() else state.params
