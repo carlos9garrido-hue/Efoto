@@ -260,6 +260,7 @@ fun SoftButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
  * Deslizador fino: la parte activa sale del centro si el rango es de -x a +x. Doble toque en el
  * nombre o en el valor lo restablece (lo gestiona quien lo usa).
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ElegantSlider(value: Float, onChange: (Float) -> Unit, range: ClosedFloatingPointRange<Float>, modifier: Modifier = Modifier) {
     val bipolar = range.start < 0f
