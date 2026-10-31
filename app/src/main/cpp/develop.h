@@ -14,7 +14,10 @@ struct Params {
     static constexpr int kHslBands = 8;     // rojo, naranja, amarillo, verde, aqua, azul, púrpura, magenta
     static constexpr int kGeomStart = 10 + kCurvePoints + kHslBands * 3;  // 39
     static constexpr int kFxStart = kGeomStart + 6;                        // 45
-    static constexpr int kCount = kFxStart + 16;                           // 61
+    static constexpr int kMaskStart = kFxStart + 16;                       // 61
+    static constexpr int kMaskCount = 4;       // máscaras locales (degradados)
+    static constexpr int kMaskFloats = 13;     // valores por máscara, ver Mask más abajo
+    static constexpr int kCount = kMaskStart + kMaskCount * kMaskFloats;   // 113
     float exposure = 0;     // EV, -5 .. +5
     float contrast = 0;     // -1 .. +1
     float highlights = 0;   // -1 .. +1
@@ -45,6 +48,24 @@ struct Params {
     float gradeHue[3] = {0, 0, 0};
     float gradeSat[3] = {0, 0, 0};
     float gradeBalance = 0;
+
+    // Ediciones locales. Cada máscara (13 valores):
+    //   0 tipo (0 apagada, 1 lineal, 2 radial)
+    //   1-4 lineal: (x1,y1) donde empieza el efecto pleno y (x2,y2) donde llega a cero
+    //       radial: centro (x1,y1) y radios (x2,y2); todo en 0..1 sobre la imagen final
+    //   5 suavizado del borde (radial, 0..1)   6 invertir (>0.5)
+    //   7-12 ajustes locales: exposición (EV), contraste, luces, sombras, temperatura, saturación
+    float masks[kMaskCount * kMaskFloats] = {};
+
+    bool hasLocal() const {
+        for (int m = 0; m < kMaskCount; ++m) {
+            const float* k = masks + m * kMaskFloats;
+            if (k[0] < 0.5f) continue;
+            for (int i = 7; i < 13; ++i)
+                if (k[i] != 0.f) return true;
+        }
+        return false;
+    }
 
     bool hasSpatial() const {
         return clarity != 0.f || texture != 0.f || dehaze != 0.f || sharpen > 0.f || nrLuma > 0.f ||
@@ -99,6 +120,8 @@ private:
 
     Params p_;
     bool spatial_ = false, grade_ = false;
+    int nMask_ = 0;
+    float mask_[Params::kMaskCount][Params::kMaskFloats];
     int outW_ = 1, outH_ = 1, gridW_ = 1, gridH_ = 1;
     float gain_[3];
     float hlk_;

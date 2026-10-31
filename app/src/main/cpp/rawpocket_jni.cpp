@@ -6,8 +6,10 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <algorithm>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "analysis.h"
 #include "develop.h"
@@ -203,15 +205,15 @@ Java_com_rawpocket_RawNative_nativeRender(JNIEnv* env, jobject, jlong h, jfloatA
 // Devuelve 0 si todo salió bien, o un código de error (<0).
 JNIEXPORT jint JNICALL
 Java_com_rawpocket_RawNative_nativeExport(JNIEnv* env, jobject, jlong h, jfloatArray jparams,
-                                          jstring joutPath, jint quality, jint maxEdge) {
+                                          jstring joutPath, jint quality, jint maxEdge, jint format) {
     auto* s = lookup(h);
     if (!s || !jparams || !joutPath) return rp::kErrBadArgs;
     if (env->GetArrayLength(jparams) < rp::Params::kCount) return rp::kErrBadArgs;
 
     float p[rp::Params::kCount];
     env->GetFloatArrayRegion(jparams, 0, rp::Params::kCount, p);
-    return rp::exportJpeg(*s, rp::Params::fromArray(p),
-                          toStd(env, joutPath), quality, maxEdge);
+    return rp::exportImage(*s, rp::Params::fromArray(p), toStd(env, joutPath), quality, maxEdge,
+                           format == 1 ? rp::kFormatPng : rp::kFormatJpeg);
 }
 
 JNIEXPORT void JNICALL

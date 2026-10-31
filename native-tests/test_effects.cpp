@@ -176,6 +176,43 @@ int main() {
         auto n = develop(s, W, H, none);
         CHECK(std::abs(mean(n, W, 40, 20, 42, 100, 0) - mean(n, W, 40, 20, 42, 100, 2)) < 1.0);  // sin saturación, neutro
     }
+    std::printf("[ediciones locales]\n");
+    {
+        auto s = flat(W, H, 0.25f);
+        auto base = develop(s, W, H, rp::Params(), false);
+        auto setMask = [](rp::Params& p, int m, float type, float x1, float y1, float x2, float y2, float feather, float invert) {
+            float* k = p.masks + m * rp::Params::kMaskFloats;
+            k[0] = type; k[1] = x1; k[2] = y1; k[3] = x2; k[4] = y2; k[5] = feather; k[6] = invert;
+        };
+        // degradado lineal de arriba (efecto pleno) a abajo (cero): arriba más oscuro, abajo igual
+        rp::Params lin; setMask(lin, 0, 1, 0, 0, 0, 1, 0, 0); lin.masks[7] = -1.f;
+        CHECK(lin.hasLocal());
+        auto o = develop(s, W, H, lin, false);
+        double top = mean(o, W, 0, 0, W, 4), mid = mean(o, W, 0, H / 2 - 2, W, H / 2 + 2), bot = mean(o, W, 0, H - 4, W, H);
+        double bTop = mean(base, W, 0, 0, W, 4), bBot = mean(base, W, 0, H - 4, W, H);
+        std::printf("  lineal: arriba %.0f, medio %.0f, abajo %.0f (sin editar %.0f)\n", top, mid, bot, bTop);
+        CHECK(top < bTop - 30 && std::fabs(bot - bBot) < 1.5 && mid > top && mid < bot);
+        // invertir intercambia los extremos
+        rp::Params inv = lin; inv.masks[6] = 1.f;
+        auto oi = develop(s, W, H, inv, false);
+        CHECK(std::fabs(mean(oi, W, 0, 0, W, 4) - bTop) < 1.5 && mean(oi, W, 0, H - 4, W, H) < bBot - 30);
+        // radial: el centro cambia y las esquinas no
+        rp::Params rad; setMask(rad, 1, 2, 0.5f, 0.5f, 0.25f, 0.25f, 0.5f, 0); rad.masks[13 + 7] = 1.f;
+        auto orad = develop(s, W, H, rad, false);
+        CHECK(mean(orad, W, W / 2 - 3, H / 2 - 3, W / 2 + 3, H / 2 + 3) > mean(base, W, 0, 0, 6, 6) + 25);
+        CHECK(std::fabs(mean(orad, W, 0, 0, 6, 6) - mean(base, W, 0, 0, 6, 6)) < 1.5);
+        // máscaras apagadas o sin ajustes no cambian nada
+        rp::Params off; setMask(off, 0, 0, 0, 0, 0, 1, 0, 0); off.masks[7] = 1.f;
+        CHECK(!off.hasLocal() && develop(s, W, H, off, false) == base);
+        rp::Params zero; setMask(zero, 0, 1, 0, 0, 0, 1, 0, 0);
+        CHECK(!zero.hasLocal() && develop(s, W, H, zero, false) == base);
+        // la máscara sigue a la imagen final (recorte): con recorte derecho de 50 % el centro de la imagen final es x=0.25 original
+        rp::Params cr; setMask(cr, 0, 2, 0.5f, 0.5f, 0.2f, 0.2f, 0.3f, 0); cr.masks[7] = 1.f; cr.cropL = 0.5f;
+        int ow, oh; rp::outputSize(W, H, cr, ow, oh);
+        std::vector<uint8_t> g(size_t(ow) * oh * 3);
+        rp::developGeometry(s.data(), W, H, cr, g.data(), ow, oh, 1);
+        CHECK(mean(g, ow, ow / 2 - 2, oh / 2 - 2, ow / 2 + 2, oh / 2 + 2) > mean(g, ow, 0, 0, 4, 4) + 20);
+    }
     std::printf(fails ? "FALLÓ (%d)\n" : "OK\n", fails);
     return fails ? 1 : 0;
 }

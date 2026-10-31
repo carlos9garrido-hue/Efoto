@@ -58,6 +58,11 @@ class MainActivity : ComponentActivity() {
                         onAuto = viewModel::autoAdjust,
                         onPickWb = viewModel::pickWhiteBalance,
                         onResetGroup = viewModel::resetGroup,
+                        local = LocalActions(
+                            onAdd = viewModel::addMask,
+                            onRemove = viewModel::removeMask,
+                            onChange = viewModel::setMask,
+                        ),
                     ),
                     presets = presets,
                     canPaste = canPaste,

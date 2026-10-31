@@ -23,9 +23,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 
-/** Opciones de exportación: calidad JPEG (1..100) y lado largo máximo en píxeles (0 = original). */
-data class ExportOptions(val quality: Int = 95, val maxEdge: Int = 0) {
+/**
+ * Opciones de exportación: calidad JPEG (1..100), lado largo máximo en píxeles (0 = original) y
+ * formato (0 = JPG, 1 = PNG sin pérdida).
+ */
+data class ExportOptions(val quality: Int = 95, val maxEdge: Int = 0, val format: Int = 0) {
+    val isPng: Boolean get() = format == 1
+    val extension: String get() = if (isPng) "png" else "jpg"
+    val mime: String get() = if (isPng) "image/png" else "image/jpeg"
+
     companion object {
+        val formats = listOf("JPG" to 0, "PNG" to 1)
         val qualities = listOf("Máxima" to 95, "Alta" to 90, "Media" to 80, "Ligera" to 65)
         val sizes = listOf("Original" to 0, "4096 px" to 4096, "2048 px" to 2048, "1080 px" to 1080)
     }
@@ -49,6 +57,7 @@ class BatchActions(
 /** Elegir calidad y tamaño antes de exportar (una foto o varias). */
 @Composable
 fun ExportDialog(title: String, onDismiss: () -> Unit, onConfirm: (ExportOptions) -> Unit) {
+    var f by rememberSaveable { mutableStateOf(0) }
     var q by rememberSaveable { mutableStateOf(0) }
     var s by rememberSaveable { mutableStateOf(0) }
     AlertDialog(
@@ -57,19 +66,23 @@ fun ExportDialog(title: String, onDismiss: () -> Unit, onConfirm: (ExportOptions
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Overline("Calidad")
-                Options(ExportOptions.qualities.map { it.first }, q) { q = it }
+                Overline("Formato")
+                Options(ExportOptions.formats.map { it.first }, f) { f = it }
+                if (f == 0) {
+                    Overline("Calidad")
+                    Options(ExportOptions.qualities.map { it.first }, q) { q = it }
+                }
                 Overline("Tamaño (lado largo)")
                 Options(ExportOptions.sizes.map { it.first }, s) { s = it }
                 Text(
-                    "Se guarda en Pictures/Efoto como JPG.",
+                    if (f == 0) "Se guarda en Pictures/Efoto como JPG." else "Se guarda en Pictures/Efoto como PNG (sin pérdida, pesa más).",
                     style = MaterialTheme.typography.bodySmall,
                     color = Palette.TextSecondary,
                 )
             }
         },
         confirmButton = {
-            TextButton({ onConfirm(ExportOptions(ExportOptions.qualities[q].second, ExportOptions.sizes[s].second)) }) {
+            TextButton({ onConfirm(ExportOptions(ExportOptions.qualities[q].second, ExportOptions.sizes[s].second, ExportOptions.formats[f].second)) }) {
                 Text("Exportar", color = Palette.Accent)
             }
         },

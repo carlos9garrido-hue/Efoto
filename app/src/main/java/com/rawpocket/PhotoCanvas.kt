@@ -48,6 +48,7 @@ class ToolActions(
     val onAuto: () -> Unit,
     val onPickWb: (Float, Float) -> Unit,
     val onResetGroup: (Group) -> Unit,
+    val local: LocalActions,
 )
 
 /**
@@ -61,6 +62,7 @@ fun PhotoCanvas(
     tools: ToolActions,
     picking: Boolean,
     onPickingDone: () -> Unit,
+    maskSel: Int,
     onHoldOriginal: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -73,6 +75,11 @@ fun PhotoCanvas(
         view.invalidate()
     }
     val pickingNow by rememberUpdatedState(picking)
+    val paramsNow by rememberUpdatedState(state.params)
+    val selNow by rememberUpdatedState(maskSel)
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val grabPx = with(density) { 40.dp.toPx() }
+    var dragLast by remember { mutableStateOf<Pair<Float, Float>?>(null) }
 
     Box(modifier, contentAlignment = Alignment.Center) {
         GpuPreview(photo = state.photo, params = gpuParams, view = view, modifier = Modifier.fillMaxSize())
@@ -81,13 +88,48 @@ fun PhotoCanvas(
         Box(
             Modifier
                 .fillMaxSize()
-                .photoGestures(view) { pos ->
+                .photoGestures(
+                    view,
+                    hitHandle = { pos ->
+                        val sel = selNow
+                        if (sel !in 0 until EditParams.MASK_COUNT) -1 else {
+                            val m = paramsNow.mask(sel)
+                            var best = -1
+                            var bestD = grabPx
+                            for ((id, uv) in maskHandles(m)) {
+                                val d = (view.toScreen(uv.first, uv.second) - pos).getDistance()
+                                if (d < bestD) { bestD = d; best = id }
+                            }
+                            dragLast = null
+                            best
+                        }
+                    },
+                    onHandleDrag = { id, pos ->
+                        val sel = selNow
+                        if (sel in 0 until EditParams.MASK_COUNT) {
+                            val (u, v) = view.toImageUvClamped(pos.x, pos.y)
+                            val last = dragLast ?: (u to v)
+                            dragLast = u to v
+                            val m = dragMask(paramsNow.mask(sel), id, u, v, u - last.first, v - last.second)
+                            tools.local.onChange(sel, m, 300000 + sel)
+                        }
+                    },
+                ) { pos ->
                     if (pickingNow) {
                         view.toImageUv(pos.x, pos.y)?.let { (u, v) -> tools.onPickWb(u, v) }
                         onPickingDone()
                     }
                 }
         )
+
+        if (maskSel in 0 until EditParams.MASK_COUNT && !state.showOriginal) {
+            val m = state.params.mask(maskSel)
+            val handleR = with(density) { 9.dp.toPx() }
+            val tick = view.tick
+            Canvas(Modifier.fillMaxSize()) {
+                if (tick >= 0) drawMaskGuide(m, { u, v -> view.toScreen(u, v) }, Palette.Accent, handleR)
+            }
+        }
 
         if (state.showOriginal) {
             Chip("ORIGINAL", Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
@@ -182,7 +224,12 @@ private fun Modifier.holdToCompareChip(onHold: (Boolean) -> Unit): Modifier = th
  * Gestos de la foto: dos dedos = zoom y desplazamiento; un dedo = desplazamiento si hay zoom (o
  * arrastrar la línea divisoria de la comparación); doble toque = acercar/ajustar; toque = [onTap].
  */
-private fun Modifier.photoGestures(view: PreviewView, onTap: (Offset) -> Unit): Modifier =
+private fun Modifier.photoGestures(
+    view: PreviewView,
+    hitHandle: (Offset) -> Int,
+    onHandleDrag: (Int, Offset) -> Unit,
+    onTap: (Offset) -> Unit,
+): Modifier =
     pointerInput(view) {
         var lastTapTime = 0L
         awaitEachGesture {
@@ -192,8 +239,18 @@ private fun Modifier.photoGestures(view: PreviewView, onTap: (Offset) -> Unit): 
             // ¿Empezó sobre la línea divisoria?
             val vw = view.fitW * view.zoom
             val dividerX = view.surfW / 2f + view.panX - vw / 2f + view.splitFrac * vw
-            val onDivider = view.splitOn && abs(down.position.x - dividerX) < grab
+            val handle = hitHandle(down.position)
+            val onDivider = handle < 0 && view.splitOn && abs(down.position.x - dividerX) < grab
             var moved = false
+            if (handle >= 0) {
+                down.consume()
+                do {
+                    val event = awaitPointerEvent()
+                    val ch = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (ch.pressed) { onHandleDrag(handle, ch.position); ch.consume() }
+                } while (event.changes.any { it.pressed })
+                return@awaitEachGesture
+            }
             do {
                 val event = awaitPointerEvent()
                 val pressed = event.changes.filter { it.pressed }

@@ -231,9 +231,38 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { st ->
             var p = st.params
             if (group == Group.CROP) p = p.withoutGeometry()
+            else if (group == Group.LOCAL) for (m in 0 until EditParams.MASK_COUNT) p = p.withMask(m, LocalMask())
             else Adjustment.entries.filter { it.group == group }.forEach { p = it.set(p, 0f) }
             st.copy(params = p)
         }
+        onEdited()
+    }
+
+    // ---------------------------------------------------------------- ediciones locales
+
+    /** Crea una máscara nueva (lineal o radial) en el primer hueco libre y devuelve su posición, o -1 si no caben más. */
+    fun addMask(type: Int): Int {
+        if (_state.value.status != Status.READY) return -1
+        val params = _state.value.params
+        val slot = (0 until EditParams.MASK_COUNT).firstOrNull { !params.mask(it).isActive } ?: return -1
+        remember(null)
+        _state.update { it.copy(params = it.params.withMask(slot, LocalMask.create(type))) }
+        onEdited()
+        return slot
+    }
+
+    fun removeMask(slot: Int) {
+        if (slot !in 0 until EditParams.MASK_COUNT) return
+        remember(null)
+        _state.update { it.copy(params = it.params.withMask(slot, LocalMask())) }
+        onEdited()
+    }
+
+    /** Cambia una máscara. [key] agrupa cambios seguidos (arrastrar) en un solo paso de deshacer. */
+    fun setMask(slot: Int, mask: LocalMask, key: Int?) {
+        if (slot !in 0 until EditParams.MASK_COUNT) return
+        remember(key)
+        _state.update { it.copy(params = it.params.withMask(slot, mask)) }
         onEdited()
     }
 
@@ -481,11 +510,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 lock.withLock {
                     val h = handle
                     if (h <= 0L) return@withLock "No hay ninguna foto abierta."
-                    val tmp = File(getApplication<Application>().cacheDir, "export.jpg")
+                    val tmp = File(getApplication<Application>().cacheDir, "export.${options.extension}")
                     try {
-                        val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, options.quality, options.maxEdge)
+                        val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, options.quality, options.maxEdge, options.format)
                         if (rc != 0) return@withLock "No se pudo exportar: ${RawNative.nativeErrorText(rc)}"
-                        saveToGallery(tmp, "${baseName}_Efoto.jpg")
+                        saveToGallery(tmp, "${baseName}_Efoto.${options.extension}", options.mime)
                     } catch (e: Exception) {
                         "No se pudo guardar la imagen: ${e.message ?: "error desconocido"}"
                     } finally {
@@ -530,7 +559,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     private fun exportOne(item: RecentItem, options: ExportOptions): Boolean {
         val app = getApplication<Application>()
         val src = File(app.cacheDir, "batch.src")
-        val tmp = File(app.cacheDir, "batch_out.jpg")
+        val tmp = File(app.cacheDir, "batch_out.${options.extension}")
         var h = 0L
         try {
             val input = app.contentResolver.openInputStream(Uri.parse(item.uri)) ?: return false
@@ -538,9 +567,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             h = RawNative.nativeOpen(src.absolutePath, BATCH_PREVIEW_EDGE)
             if (h <= 0L) return false
             val params = loadEdits(editKeyFor(item.name, src.length())) ?: EditParams()
-            val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, options.quality, options.maxEdge)
+            val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, options.quality, options.maxEdge, options.format)
             if (rc != 0) return false
-            saveToGallery(tmp, "${item.name.substringBeforeLast('.', item.name)}_Efoto.jpg")
+            saveToGallery(tmp, "${item.name.substringBeforeLast('.', item.name)}_Efoto.${options.extension}", options.mime)
             return true
         } catch (e: Exception) {
             return false
@@ -551,11 +580,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun saveToGallery(file: File, displayName: String): String {
+    private fun saveToGallery(file: File, displayName: String, mime: String = "image/jpeg"): String {
         val resolver = getApplication<Application>().contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.MIME_TYPE, mime)
             put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Efoto")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }

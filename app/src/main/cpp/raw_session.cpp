@@ -146,6 +146,11 @@ int openSession(const std::string& path, int previewLongEdge, std::unique_ptr<Se
 
 int exportJpeg(const Session& s, const Params& p, const std::string& outPath, int quality,
                int maxEdge) {
+    return exportImage(s, p, outPath, quality, maxEdge, kFormatJpeg);
+}
+
+int exportImage(const Session& s, const Params& p, const std::string& outPath, int quality,
+                int maxEdge, int format) {
     std::vector<uint16_t> reduced;
     std::vector<uint8_t> rgb;
     int w = 0, h = 0;
@@ -186,7 +191,8 @@ int exportJpeg(const Session& s, const Params& p, const std::string& outPath, in
     FILE* f = std::fopen(outPath.c_str(), "wb");
     if (!f) return kErrWrite;
     int q = std::max(1, std::min(100, quality));
-    int ok = stbi_write_jpg_to_func(writeToFile, f, w, h, 3, rgb.data(), q);
+    int ok = format == kFormatPng ? stbi_write_png_to_func(writeToFile, f, w, h, 3, rgb.data(), w * 3)
+                                  : stbi_write_jpg_to_func(writeToFile, f, w, h, 3, rgb.data(), q);
     std::fclose(f);
     return ok ? 0 : kErrWrite;
 }

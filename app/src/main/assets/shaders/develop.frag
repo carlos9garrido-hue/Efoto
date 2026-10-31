@@ -15,7 +15,8 @@ uniform sampler2D uTex;      // RGB lineal (sRGB primarios), 1.0 = blanco
 //   45-50 detalle: claridad, textura, neblina, nitidez, ruido (luminancia), ruido (color)
 //   51-53 efectos: viñeta (cantidad, punto medio), grano
 //   54-60 gradación: tono y saturación de sombras, medios y luces; balance
-uniform float uParams[61];
+//   61-112 ediciones locales: 4 máscaras x 13 valores (ver Params::masks en develop.h)
+uniform float uParams[113];
 // Capas auxiliares para los efectos con vecinos (ver Aux en develop.h):
 //   uAuxA: rgb = imagen con desenfoque pequeño, a = luminancia con desenfoque grande
 //   uAuxB: r = luminancia con desenfoque medio, g = mínimo de canales con desenfoque grande
@@ -157,6 +158,28 @@ void sampleAux(vec2 uv, out vec4 a, out vec2 b) {
     b = bt + (bb - bt) * t.y;
 }
 
+// Peso (0..1) de la máscara m en la posición (u, v) de la imagen final (igual que maskWeight en C++).
+float maskWeight(int m, vec2 uv) {
+    int b = 61 + m * 13;
+    int type = int(floor(uParams[b] + 0.5));
+    float w;
+    if (type == 1) {
+        float dx = uParams[b + 3] - uParams[b + 1], dy = uParams[b + 4] - uParams[b + 2];
+        float len2 = max(dx * dx + dy * dy, 1e-6);
+        float t = ((uv.x - uParams[b + 1]) * dx + (uv.y - uParams[b + 2]) * dy) / len2;
+        w = 1.0 - smoothstep(0.0, 1.0, t);
+    } else if (type == 2) {
+        float rx = max(uParams[b + 3], 1e-3), ry = max(uParams[b + 4], 1e-3);
+        float ex = (uv.x - uParams[b + 1]) / rx, ey = (uv.y - uParams[b + 2]) / ry;
+        float e = sqrt(ex * ex + ey * ey);
+        float f = min(1.0, max(uParams[b + 5], 0.02));
+        w = 1.0 - smoothstep(1.0 - f, 1.0, e);
+    } else {
+        return 0.0;
+    }
+    return uParams[b + 6] > 0.5 ? 1.0 - w : w;
+}
+
 float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
 // Color puro de un tono en grados (igual que hueRgb en develop.cpp).
@@ -179,6 +202,18 @@ void main() {
     float shadows = uParams[3], whites = uParams[4], blacks = uParams[5];
     float temperature = uParams[6], tint = uParams[7];
     float vibrance = uParams[8], saturation = uParams[9];
+    // Ediciones locales: los ajustes de cada máscara activa se suman, ponderados, a los globales.
+    for (int m = 0; m < 4; m++) {
+        int b = 61 + m * 13;
+        if (uParams[b] < 0.5) continue;
+        float w = maskWeight(m, vUv);
+        exposure += w * uParams[b + 7];
+        contrast += w * uParams[b + 8];
+        highlights += w * uParams[b + 9];
+        shadows += w * uParams[b + 10];
+        temperature += w * uParams[b + 11];
+        saturation += w * uParams[b + 12];
+    }
 
     vec2 srcUv = sourceUv(vUv);
     vec3 c = sampleBilinear(srcUv);

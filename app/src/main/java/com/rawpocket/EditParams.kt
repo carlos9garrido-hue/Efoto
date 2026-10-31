@@ -17,6 +17,7 @@ enum class Group(val label: String) {
     HSL("HSL"),
     GRADE("Gradación"),
     EFFECTS("Efectos"),
+    LOCAL("Local"),
     CROP("Recorte"),
 }
 
@@ -59,6 +60,9 @@ class Adjustment private constructor(
     val band: Band? = null,
     private val isDegrees: Boolean = false,
 ) {
+    /** ¿Es un tono en grados (0..360)? */
+    val isHue: Boolean get() = isDegrees
+
     fun get(p: EditParams): Float = p.values[index]
 
     fun set(p: EditParams, v: Float): EditParams = p.with(index, v)
@@ -181,6 +185,30 @@ class EditParams private constructor(val values: List<Float>) {
         return EditParams(m)
     }
 
+    /** Máscara local [m] (0..3). */
+    fun mask(m: Int): LocalMask {
+        val b = MASK_START + m * MASK_FLOATS
+        return LocalMask(
+            type = values[b].roundToInt().coerceIn(0, 2),
+            x1 = values[b + 1], y1 = values[b + 2], x2 = values[b + 3], y2 = values[b + 4],
+            feather = values[b + 5], invert = values[b + 6] > 0.5f,
+            adjust = List(LocalMask.ADJUST_COUNT) { values[b + 7 + it] },
+        )
+    }
+
+    fun withMask(m: Int, mask: LocalMask): EditParams {
+        val b = MASK_START + m * MASK_FLOATS
+        val v = values.toMutableList()
+        v[b] = mask.type.toFloat()
+        v[b + 1] = mask.x1; v[b + 2] = mask.y1; v[b + 3] = mask.x2; v[b + 4] = mask.y2
+        v[b + 5] = mask.feather; v[b + 6] = if (mask.invert) 1f else 0f
+        for (i in 0 until LocalMask.ADJUST_COUNT) v[b + 7 + i] = mask.adjust[i]
+        return EditParams(v)
+    }
+
+    /** ¿Alguna máscara está activa? */
+    val hasMasks: Boolean get() = (0 until MASK_COUNT).any { values[MASK_START + it * MASK_FLOATS] >= 0.5f }
+
     fun with(index: Int, v: Float): EditParams =
         EditParams(values.toMutableList().also { it[index] = v })
 
@@ -193,6 +221,7 @@ class EditParams private constructor(val values: List<Float>) {
         put("version", 2)
         Adjustment.entries.forEach { put(it.name, it.get(this@EditParams).toDouble()) }
         GEO_KEYS.forEachIndexed { i, key -> put(key, values[if (i < 6) ANGLE + i else ASPECT].toDouble()) }
+        for (i in MASK_START until ASPECT) put("mk$i", values[i].toDouble())
     }.toString()
 
     override fun equals(other: Any?) = other is EditParams && other.values == values
@@ -206,7 +235,10 @@ class EditParams private constructor(val values: List<Float>) {
         const val CROP_T = ANGLE + 3
         const val CROP_R = ANGLE + 4
         const val CROP_B = ANGLE + 5
-        const val ASPECT = Adjustment.FX_START + Adjustment.FX_COUNT  // 61: solo la usa la app
+        const val MASK_START = Adjustment.FX_START + Adjustment.FX_COUNT  // 61
+        const val MASK_COUNT = 4
+        const val MASK_FLOATS = 13
+        const val ASPECT = MASK_START + MASK_COUNT * MASK_FLOATS  // 113: solo la usa la app
         const val SIZE = ASPECT + 1
         const val ENGINE_COUNT = ASPECT  // lo que lee el motor (Params::kCount)
         const val MAX_ANGLE = 45f
@@ -228,6 +260,10 @@ class EditParams private constructor(val values: List<Float>) {
             m[ROTATE] = rot.toFloat()
             for (i in 0 until 4) m[CROP_L + i] = geo[2 + i].coerceIn(0f, 0.95f)
             m[ASPECT] = aspect.toFloat()
+            for (i in MASK_START until ASPECT) {
+                val v = json.optDouble("mk$i", 0.0).toFloat()
+                m[i] = if (v.isNaN()) 0f else v.coerceIn(-5f, 5f)
+            }
             EditParams(m)
         }.getOrNull()
     }
@@ -281,4 +317,54 @@ fun fitCrop(frameW: Float, frameH: Float, angleDeg: Float, ratio: Float?): Float
     val insetX = snap((frameW / 2f - a) / frameW)
     val insetY = snap((frameH / 2f - b) / frameH)
     return floatArrayOf(insetX, insetY, insetX, insetY)
+}
+
+/**
+ * Una edición local: un degradado lineal o radial con sus propios ajustes (mismo formato que
+ * Params::masks en develop.h). Coordenadas en 0..1 sobre la imagen final.
+ *  - lineal: el efecto es pleno en (x1, y1) y llega a cero en (x2, y2)
+ *  - radial: centro (x1, y1) y radios (x2, y2)
+ */
+data class LocalMask(
+    val type: Int = 0,
+    val x1: Float = 0f, val y1: Float = 0f, val x2: Float = 0f, val y2: Float = 0f,
+    val feather: Float = 0f,
+    val invert: Boolean = false,
+    val adjust: List<Float> = List(ADJUST_COUNT) { 0f },
+) {
+    val isLinear get() = type == 1
+    val isRadial get() = type == 2
+    val isActive get() = type != 0
+
+    companion object {
+        const val ADJUST_COUNT = 6
+        const val NONE = 0
+        const val LINEAR = 1
+        const val RADIAL = 2
+
+        /** Ajustes que admite cada máscara, en el orden del motor. */
+        val ADJUSTMENTS = listOf(
+            LocalAdjustment("Exposición", -2f, 2f, isEv = true),
+            LocalAdjustment("Contraste", -1f, 1f),
+            LocalAdjustment("Luces altas", -1f, 1f),
+            LocalAdjustment("Sombras", -1f, 1f),
+            LocalAdjustment("Temperatura", -1f, 1f),
+            LocalAdjustment("Saturación", -1f, 1f),
+        )
+
+        /** Una máscara nueva con una posición inicial razonable. */
+        fun create(type: Int): LocalMask = when (type) {
+            LINEAR -> LocalMask(LINEAR, 0.5f, 0.15f, 0.5f, 0.55f, adjust = listOf(-0.5f, 0f, 0f, 0f, 0f, 0f))
+            else -> LocalMask(RADIAL, 0.5f, 0.5f, 0.3f, 0.25f, feather = 0.6f, adjust = listOf(0.5f, 0f, 0f, 0f, 0f, 0f))
+        }
+    }
+}
+
+class LocalAdjustment(val label: String, val min: Float, val max: Float, private val isEv: Boolean = false) {
+    fun format(v: Float): String = if (isEv) {
+        if (v == 0f) "0" else String.format(Locale.US, "%+.2f EV", v)
+    } else {
+        val n = (v * 100f).roundToInt()
+        if (n == 0) "0" else String.format(Locale.US, "%+d", n)
+    }
 }

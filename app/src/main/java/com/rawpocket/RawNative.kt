@@ -47,8 +47,8 @@ object RawNative {
     /** Revela la vista previa dentro de [bitmap] (ARGB_8888, mismo tamaño que la vista previa). */
     external fun nativeRender(handle: Long, params: FloatArray, bitmap: Bitmap): Boolean
 
-    /** Exporta un JPEG. [maxEdge] = 0 para resolución completa. Devuelve 0 o un código de error. */
-    external fun nativeExport(handle: Long, params: FloatArray, outPath: String, quality: Int, maxEdge: Int): Int
+    /** Exporta un JPEG (format 0) o PNG (1). [maxEdge] = 0 para resolución completa. Devuelve 0 o un código de error. */
+    external fun nativeExport(handle: Long, params: FloatArray, outPath: String, quality: Int, maxEdge: Int, format: Int): Int
 
     external fun nativeClose(handle: Long)
 }

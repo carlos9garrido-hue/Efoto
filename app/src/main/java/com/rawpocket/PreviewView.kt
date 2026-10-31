@@ -1,5 +1,9 @@
 package com.rawpocket
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import kotlin.math.max
 import kotlin.math.min
 
@@ -24,6 +28,28 @@ class PreviewView {
     @Volatile var fitW = 1f
     @Volatile var fitH = 1f
 
+    /** Sube cada vez que cambia el encuadre (zoom, desplazamiento o tamaño): las capas dibujadas encima lo leen. */
+    var tick by mutableIntStateOf(0)
+        private set
+
+    fun bump() { tick += 1 }
+
+    /** Posición (0..1, 0..1) sobre la imagen mostrada -> punto de pantalla. */
+    fun toScreen(u: Float, v: Float): Offset {
+        val vw = fitW * zoom
+        val vh = fitH * zoom
+        return Offset(surfW / 2f + panX - vw / 2f + u * vw, surfH / 2f + panY - vh / 2f + v * vh)
+    }
+
+    /** Punto de pantalla -> posición sobre la imagen, recortada a 0..1. */
+    fun toImageUvClamped(x: Float, y: Float): Pair<Float, Float> {
+        val vw = max(1f, fitW * zoom)
+        val vh = max(1f, fitH * zoom)
+        val u = (x - (surfW / 2f + panX - vw / 2f)) / vw
+        val v = (y - (surfH / 2f + panY - vh / 2f)) / vh
+        return u.coerceIn(0f, 1f) to v.coerceIn(0f, 1f)
+    }
+
     /** La UI lo cambia por algo que pide un nuevo fotograma. */
     @Volatile var invalidate: () -> Unit = {}
 
@@ -31,6 +57,7 @@ class PreviewView {
 
     fun reset() {
         zoom = 1f; panX = 0f; panY = 0f
+        bump()
         invalidate()
     }
 
@@ -46,6 +73,7 @@ class PreviewView {
         panX = nx - surfW / 2f
         panY = ny - surfH / 2f
         clampPan()
+        bump()
         invalidate()
     }
 

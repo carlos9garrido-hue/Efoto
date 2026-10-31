@@ -32,6 +32,12 @@ int openSession(const std::string& path, int previewLongEdge, std::unique_ptr<Se
 int exportJpeg(const Session& s, const Params& p, const std::string& outPath, int quality,
                int maxEdge);
 
+constexpr int kFormatJpeg = 0;
+constexpr int kFormatPng = 1;
+// Igual, eligiendo el formato (JPEG con `quality`, o PNG sin pérdida).
+int exportImage(const Session& s, const Params& p, const std::string& outPath, int quality,
+                int maxEdge, int format);
+
 // Calcula (una vez) las capas auxiliares de la vista previa.
 void ensureAux(Session& s);
 

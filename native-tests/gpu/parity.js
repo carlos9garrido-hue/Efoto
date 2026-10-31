@@ -21,7 +21,7 @@ const frag = fs.readFileSync(path.join(SHADERS, 'develop.frag'), 'utf8');
 const inFile = process.env.PARITY_IMAGE || path.join(work, 'in.rgb16');
 if (!process.env.PARITY_IMAGE) execFileSync('python3', [path.join(__dirname, 'gen_image.py'), inFile]);
 
-// Orden de los 61 parámetros (igual que Params en develop.h)
+// Orden de los 113 parámetros (igual que Params en develop.h)
 const names = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temperature', 'tint', 'vibrance', 'saturation'];
 for (let i = 0; i < 5; i++) names.push(`curve${i}`);
 const bands = ['rojo', 'naranja', 'amarillo', 'verde', 'aqua', 'azul', 'purpura', 'magenta'];
@@ -30,20 +30,23 @@ names.push('angle', 'rotate90', 'cropL', 'cropT', 'cropR', 'cropB');  // geometr
 names.push('clarity', 'texture', 'dehaze', 'sharpen', 'nrLuma', 'nrColor');  // detalle (45-50)
 names.push('vigAmount', 'vigMid', 'grain');  // efectos (51-53)
 names.push('shHue', 'shSat', 'midHue', 'midSat', 'hiHue', 'hiSat', 'balance');  // gradación (54-60)
-const N = names.length;  // 61
+const MASK_FIELDS = ['type', 'x1', 'y1', 'x2', 'y2', 'feather', 'invert', 'exp', 'con', 'hi', 'sh', 'temp', 'sat'];
+for (let m = 0; m < 4; m++) for (const f of MASK_FIELDS) names.push(`m${m}${f}`);  // ediciones locales (61-112)
+const N = names.length;  // 113
 const HUE = new Set([54, 56, 58]);
 const POSITIVE = new Set([48, 49, 50, 53, 55, 57, 59]);  // solo tienen efecto con valores > 0
 
 const amp = (i) => (i === 0 ? 1.5 : i >= 10 && i < 15 ? 0.2 : i === 39 ? 20 : i === 40 ? 1 : i >= 41 && i <= 44 ? 0.3 : HUE.has(i) ? 200 : 0.7);
 const cases = [{ name: 'neutro', p: new Array(N).fill(0) }];
 names.forEach((n, i) => {
+  if (i >= 61) return;  // las máscaras tienen sus propios casos
   for (const sign of [1, -1]) {
     const p = new Array(N).fill(0);
     p[i] = sign * amp(i);
     cases.push({ name: `${n} ${sign > 0 ? '+' : '-'}`, p });
   }
 });
-const maxAll = names.map((_, i) => (i === 0 ? 2 : i >= 10 && i < 15 ? 0.25 : i === 39 ? 30 : i === 40 ? 3 : i >= 41 && i <= 44 ? 0.4 : HUE.has(i) ? 300 : 1));
+const maxAll = names.map((_, i) => (i === 0 ? 2 : i >= 10 && i < 15 ? 0.25 : i === 39 ? 30 : i === 40 ? 3 : i >= 41 && i <= 44 ? 0.4 : HUE.has(i) ? 300 : i >= 61 ? 0 : 1));
 cases.push({ name: 'todo al máximo', p: maxAll });
 cases.push({ name: 'todo al mínimo', p: maxAll.map((v, i) => (POSITIVE.has(i) || HUE.has(i) ? v : -v)) });
 // Geometría con nombre propio (giros, enderezado con recorte, combinada con tono y color)
@@ -62,10 +65,39 @@ cases.push({ name: 'viñeta + grano + giro', p: geo({ vigAmount: -0.8, vigMid: 0
 cases.push({ name: 'viñeta clara', p: geo({ vigAmount: 0.8, vigMid: -0.5, exposure: -0.5 }) });
 cases.push({ name: 'efectos + enderezar', p: geo({ clarity: 0.5, dehaze: 0.4, sharpen: 0.5, vigAmount: -0.5, grain: 0.4, shSat: 0.5, shHue: 200, angle: 12, cropL: 0.12, cropR: 0.12, cropT: 0.15, cropB: 0.15 }) });
 cases.push({ name: 'giro 270 + tono/HSL', p: geo({ rotate90: 3, angle: -15, cropB: 0.2, exposure: 0.5, contrast: 0.3, 'rojo-sat': -0.6, 'azul-tono': 0.5, curve2: 0.15 }) });
+// Ediciones locales
+const mk = (m, o) => { const r = {}; Object.entries(o).forEach(([k, v]) => { r[`m${m}${k}`] = v; }); return r; };
+const lin = (m, x1, y1, x2, y2, adj, invert = 0) => mk(m, { type: 1, x1, y1, x2, y2, invert, ...adj });
+const rad = (m, cx, cy, rx, ry, feather, adj, invert = 0) => mk(m, { type: 2, x1: cx, y1: cy, x2: rx, y2: ry, feather, invert, ...adj });
+cases.push({ name: 'local lineal exposición', p: geo(lin(0, 0, 0.1, 0, 0.9, { exp: -1.2 })) });
+cases.push({ name: 'local lineal diagonal', p: geo(lin(0, 0.1, 0.1, 0.9, 0.8, { exp: 0.8, con: 0.4, temp: -0.5, sat: 0.5 })) });
+cases.push({ name: 'local lineal invertida', p: geo(lin(0, 0, 0.2, 0, 0.7, { hi: -0.8, sh: 0.6, exp: -0.5 }, 1)) });
+cases.push({ name: 'local radial', p: geo(rad(0, 0.5, 0.5, 0.35, 0.3, 0.6, { exp: 1.0, sat: -0.5 })) });
+cases.push({ name: 'local radial invertida', p: geo(rad(0, 0.4, 0.6, 0.4, 0.4, 1.0, { exp: -1.0, con: 0.5, temp: 0.4 }, 1)) });
+cases.push({ name: 'local radial borde duro', p: geo(rad(0, 0.5, 0.5, 0.3, 0.3, 0.0, { exp: 0.7, hi: -0.5 })) });
+cases.push({ name: 'local 4 máscaras', p: geo({ ...lin(0, 0, 0, 0, 0.6, { exp: -0.6 }), ...rad(1, 0.3, 0.7, 0.3, 0.25, 0.5, { sat: 0.7, temp: 0.3 }), ...rad(2, 0.8, 0.3, 0.2, 0.3, 0.8, { exp: 0.5, sh: 0.5 }, 1), ...lin(3, 1, 0, 0.3, 1, { con: -0.5, hi: -0.4 }) }) });
+cases.push({ name: 'local + global + giro', p: geo({ exposure: 0.4, contrast: 0.2, shadows: 0.3, ...lin(0, 0, 0, 0, 1, { exp: -0.8 }), rotate90: 1, angle: 8, cropL: 0.1, cropR: 0.15, cropT: 0.05, cropB: 0.2 }) });
+cases.push({ name: 'local con ceros', p: geo({ ...mk(0, { type: 1, x1: 0, y1: 0, x2: 1, y2: 1 }), ...mk(1, { type: 2, x1: .5, y1: .5, x2: .3, y2: .3, feather: .5 }) }) });
+cases.push({ name: 'local + efectos', p: geo({ clarity: 0.5, vigAmount: -0.4, grain: 0.3, shSat: 0.4, shHue: 210, ...rad(0, 0.5, 0.5, 0.4, 0.4, 0.5, { exp: 0.6, temp: -0.4 }) }) });
 // Combinaciones pseudoaleatorias reproducibles
 let seed = 42;
 const rnd = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296) * 2 - 1;
-for (let k = 0; k < 30; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.map((_, i) => (POSITIVE.has(i) || HUE.has(i) ? (rnd() * 0.5 + 0.5) * maxAll[i] : rnd() * maxAll[i])) });
+let seed2 = 7;
+const r01 = () => (seed2 = (seed2 * 1664525 + 1013904223) % 4294967296) / 4294967296;
+for (let k = 0; k < 20; k++) {
+  const p = names.map((_, i) => (i < 61 && r01() < 0.3 ? (r01() * 2 - 1) * maxAll[i] * 0.6 : 0));
+  for (let m = 0; m < 4; m++) {
+    if (r01() < 0.3) continue;
+    const t = r01() < 0.5 ? 1 : 2, b = 61 + m * 13;
+    p[b] = t;
+    for (let q = 1; q <= 4; q++) p[b + q] = t === 2 && q >= 3 ? 0.1 + r01() * 0.5 : r01();
+    p[b + 5] = r01(); p[b + 6] = r01() < 0.3 ? 1 : 0;
+    p[b + 7] = (r01() * 2 - 1) * 1.5;
+    for (let q = 8; q <= 12; q++) p[b + q] = (r01() * 2 - 1) * 0.8;
+  }
+  cases.push({ name: `local aleatorio ${k + 1}`, p });
+}
+for (let k = 0; k < 30; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.map((_, i) => (i >= 61 ? 0 : POSITIVE.has(i) || HUE.has(i) ? (rnd() * 0.5 + 0.5) * maxAll[i] : rnd() * maxAll[i])) });
 
 (async () => {
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });

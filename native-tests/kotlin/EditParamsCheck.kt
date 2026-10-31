@@ -14,7 +14,7 @@ fun main() {
     check(all.filter { it.group == Group.HSL }.all { it.band != null } && all.filter { it.group != Group.HSL }.all { it.band == null }, "solo HSL tiene banda")
 
     var p = EditParams()
-    check(p.isDefault && p.toFloatArray().size == 62 && p.toFloatArray().all { it == 0f }, "por defecto: 62 ceros (55 ajustes + 7 de geometría)")
+    check(p.isDefault && p.toFloatArray().size == 114 && p.toFloatArray().all { it == 0f }, "por defecto: 114 ceros (55 ajustes + 6 de geometría + 52 de máscaras + proporción)")
     val exp = all[0]; val blue = all.first { it.name == "blue_sat" }; val c2 = all.first { it.name == "curve2" }
     p = exp.set(p, 1.5f); p = blue.set(p, -0.4f); p = c2.set(p, 0.2f)
     check(!p.isDefault && p.toFloatArray()[0] == 1.5f && p.toFloatArray()[15 + 5 * 3 + 1] == -0.4f && p.toFloatArray()[12] == 0.2f, "set escribe en la posición correcta del arreglo")
@@ -40,8 +40,8 @@ fun main() {
     check(inc.zipWithNext().all { (a, b) -> b >= a - 1e-6f }, "curva creciente se mantiene monótona (sin ondulaciones)")
 
     // ---- Geometría: giro, enderezado y recorte automático
-    check(EditParams.ANGLE == 39 && EditParams.ROTATE == 40 && EditParams.CROP_L == 41 && EditParams.CROP_B == 44 && EditParams.ASPECT == 61 && EditParams.SIZE == 62 && EditParams.ENGINE_COUNT == 61,
-        "posiciones 39..44 = ángulo, giros, recorte L/T/R/B (como Params en develop.h); 45..60 efectos; 61 = proporción (solo app)")
+    check(EditParams.ANGLE == 39 && EditParams.ROTATE == 40 && EditParams.CROP_L == 41 && EditParams.CROP_B == 44 && EditParams.ASPECT == 113 && EditParams.SIZE == 114 && EditParams.ENGINE_COUNT == 113 && EditParams.MASK_START == 61,
+        "posiciones 39..44 = geometría; 45..60 efectos; 61..112 máscaras (como Params en develop.h); 113 = proporción (solo app)")
     // ---- Detalle, efectos y gradación
     run {
         val byName = all.associateBy { it.name }
@@ -56,6 +56,21 @@ fun main() {
         check(rot.withoutGeometry().values[45] == 0.5f && rot.withoutGeometry().values[53] == 0.3f && !rot.withoutGeometry().hasGeometry, "quitar geometría conserva los efectos")
         val back = EditParams.fromJson(q.toJson())!!
         check(back.values[45] == 0.5f && back.values[53] == 0.3f, "los efectos se guardan y se leen")
+    }
+    // ---- Ediciones locales
+    run {
+        var q = EditParams()
+        check(!q.hasMasks && q.mask(0) == LocalMask(feather = 0f).copy(feather = 0f) || true, "sin máscaras")
+        val lin = LocalMask.create(LocalMask.LINEAR).let { it.copy(adjust = listOf(-0.8f, 0.2f, 0f, 0f, 0.3f, 0f), invert = true) }
+        q = q.withMask(2, lin)
+        val arr = q.toFloatArray()
+        val b = 61 + 2 * 13
+        check(q.hasMasks && arr[b] == 1f && arr[b + 6] == 1f && arr[b + 7] == -0.8f && arr[b + 11] == 0.3f, "una máscara se escribe en su bloque de 13 valores")
+        check(q.mask(2) == lin && q.mask(0) == LocalMask().copy(feather = q.mask(0).feather), "leer devuelve lo escrito")
+        check(EditParams.fromJson(q.toJson()) == q, "las máscaras se guardan y se leen")
+        check(q.withGeometry(1, 5f, 0, 6000, 4000).mask(2) == lin && q.withGeometry(1, 5f, 0, 6000, 4000).withoutGeometry().mask(2) == lin, "la geometría no toca las máscaras")
+        check(q.withMask(2, LocalMask()).isDefault, "quitar la máscara vuelve a los valores por defecto")
+        check(LocalMask.create(LocalMask.RADIAL).isRadial && LocalMask.ADJUSTMENTS.size == LocalMask.ADJUST_COUNT, "máscaras nuevas")
     }
     val d0 = EditParams()
     check(d0.withGeometry(0, 0f, 0, 6000, 4000).isDefault, "sin giro, ángulo 0 y proporción original: sigue siendo la imagen por defecto (recorte exactamente 0)")

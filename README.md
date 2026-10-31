@@ -23,7 +23,8 @@ Hecho:
 - **Revelado en GPU** (OpenGL ES 3.0): la vista previa es una textura half-float y los sliders solo envían 10 números al shader (`app/src/main/assets/shaders/develop.frag`). Sin copias de píxeles CPU↔GPU al editar.
 - La exportación usa el mismo algoritmo en C++ (CPU) a resolución completa; una prueba automática garantiza que ambos coinciden (diferencia máxima de 1 nivel de 8 bits en 120 combinaciones de los 45 parámetros).
 - Ediciones guardadas como JSON por foto (el RAW nunca se modifica).
-- Exportación JPEG a resolución completa a `Pictures/Efoto`.
+- **Ediciones locales**: hasta 4 máscaras (degradado lineal o radial, con borde suave e inversión), cada una con exposición, contraste, luces altas, sombras, temperatura y saturación; se mueven arrastrando sus puntos sobre la foto.
+- Exportación JPEG o PNG a resolución completa a `Pictures/Efoto`.
 - Mantener pulsada la foto muestra el original.
 - Abrir RAW, JPG y PNG desde el explorador de archivos / galería.
 
@@ -31,7 +32,7 @@ Pendiente (siguientes fases):
 - Exportación acelerada por GPU (hoy se exporta en CPU multihilo).
 - Recorte libre arrastrando las esquinas, nitidez, reducción de ruido, viñeta, grano.
 - Catálogo (biblioteca con valoraciones y etiquetas), presets, copiar/pegar ajustes.
-- Máscaras locales, eliminación de manchas, perfiles de lente, exportación DNG/TIFF.
+- Máscaras de pincel, eliminación de manchas, perfiles de lente, exportación DNG/TIFF.
 - DNG con compresión JPEG con pérdida (requiere compilar LibRaw con libjpeg).
 
 ## Pruebas en PC (sin Android)

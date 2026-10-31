@@ -137,6 +137,14 @@ int main(int argc, char** argv) {
             CHECK(!s->aux.empty() && s->aux.w == s->pw && s->aux.h == s->ph);
         }
 
+        // exportar PNG con tamaño limitado
+        {
+            std::string pn = dir + "/t_out.png";
+            CHECK(rp::exportImage(*s, rp::Params(), pn, 90, 4, rp::kFormatPng) == 0);
+            std::vector<uint16_t> v; int w, h; rp::ExifInfo e;
+            CHECK(rp::decodeImageFile(pn, v, w, h, e) == 0 && std::max(w, h) <= 4 && std::max(w, h) >= 3);
+        }
+
         // PNG
         std::vector<uint8_t> png;
         stbi_write_png_to_func(wr, &png, W, H, 3, rgb.data(), W * 3);

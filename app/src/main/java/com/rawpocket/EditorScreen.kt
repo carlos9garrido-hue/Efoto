@@ -174,9 +174,12 @@ private fun ReadyScreen(
     var open by rememberSaveable { mutableStateOf(true) }   // panel desplegado o recogido
     var band by rememberSaveable { mutableStateOf(0) }      // banda de color seleccionada en HSL
     var picking by remember { mutableStateOf(false) }       // cuentagotas de balance de blancos activo
+    var maskSel by rememberSaveable { mutableStateOf(-1) }  // máscara local elegida (-1 = ninguna)
     val presetsTab = Group.entries.size  // la última pestaña es la de presets
     val isPresets = tab == presetsTab
     val group = Group.entries[tab.coerceIn(0, Group.entries.size - 1)]
+    val localOpen = open && !isPresets && group == Group.LOCAL
+    if (maskSel >= 0 && !state.params.mask(maskSel).isActive) maskSel = -1
 
     Column(Modifier.fillMaxSize()) {
         TopBar(state, onHome) { askExport = true }
@@ -190,6 +193,7 @@ private fun ReadyScreen(
             tools = tools,
             picking = picking,
             onPickingDone = { picking = false },
+            maskSel = if (localOpen) maskSel else -1,
             onHoldOriginal = onHoldOriginal,
             modifier = Modifier
                 .weight(1f)
@@ -238,6 +242,7 @@ private fun ReadyScreen(
                             Group.CURVE -> CurvePreview(state.params)
                             Group.HSL -> BandPicker(band, state.params) { band = it }
                             Group.CROP -> CropPanel(state.params, crop)
+                            Group.LOCAL -> LocalPanel(state.params, maskSel, { maskSel = it }, tools.local)
                             else -> Unit
                         }
                         val bandFilter = if (group == Group.HSL) Band.entries[band] else null
@@ -265,6 +270,7 @@ private fun ReadyScreen(
 /** ¿Tiene este grupo algún ajuste distinto del valor por defecto? */
 private fun EditParams.groupChanged(group: Group): Boolean =
     if (group == Group.CROP) hasGeometry
+    else if (group == Group.LOCAL) hasMasks
     else Adjustment.entries.any { it.group == group && it.get(this) != 0f }
 
 @Composable

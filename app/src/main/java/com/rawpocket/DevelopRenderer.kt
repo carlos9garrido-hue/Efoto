@@ -135,10 +135,13 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         val scale = min(surfaceWidth / outW, surfaceHeight / outH)
         val w = (outW * scale).roundToInt().coerceIn(1, surfaceWidth)
         val h = (outH * scale).roundToInt().coerceIn(1, surfaceHeight)
+        val fitChanged = view.surfW != surfaceWidth || view.surfH != surfaceHeight ||
+            view.fitW != w.toFloat() || view.fitH != h.toFloat()
         view.surfW = surfaceWidth
         view.surfH = surfaceHeight
         view.fitW = w.toFloat()
         view.fitH = h.toFloat()
+        if (fitChanged) view.bump()
         view.clampPan()
         val zoom = view.zoom
         val vw = (w * zoom).roundToInt().coerceAtLeast(1)
@@ -221,7 +224,7 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
 
     private companion object {
         const val TAG = "RawPocketGL"
-        const val PARAM_COUNT = 61  // igual que Params::kCount en develop.h
+        const val PARAM_COUNT = 113  // igual que Params::kCount en develop.h
         const val FX_FIRST = 45  // Params::kFxStart: claridad..ruido (color) son los efectos con vecinos
         const val FX_LAST_SPATIAL = 50
         const val ANGLE_INDEX = 39  // Params::kGeomStart: enderezado, giros, recorte L/T/R/B

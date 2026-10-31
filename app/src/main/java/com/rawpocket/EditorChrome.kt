@@ -43,7 +43,7 @@ import kotlin.math.sin
 // ------------------------------------------------------------------ iconos dibujados a mano
 
 /** Iconos de línea fina, dibujados con trazos para no depender de un paquete de iconos. */
-enum class ToolIcon { LIGHT, COLOR, DETAIL, CURVE, HSL, GRADE, EFFECTS, CROP, PRESETS, BACK, UNDO, REDO, SPLIT, PLUS, CHECK, CLOSE }
+enum class ToolIcon { LIGHT, COLOR, DETAIL, CURVE, HSL, GRADE, EFFECTS, LOCAL, CROP, PRESETS, BACK, UNDO, REDO, SPLIT, PLUS, CHECK, CLOSE }
 
 fun Group.icon(): ToolIcon = when (this) {
     Group.LIGHT -> ToolIcon.LIGHT
@@ -53,6 +53,7 @@ fun Group.icon(): ToolIcon = when (this) {
     Group.HSL -> ToolIcon.HSL
     Group.GRADE -> ToolIcon.GRADE
     Group.EFFECTS -> ToolIcon.EFFECTS
+    Group.LOCAL -> ToolIcon.LOCAL
     Group.CROP -> ToolIcon.CROP
 }
 
@@ -120,6 +121,11 @@ private fun DrawScope.drawGlyph(icon: ToolIcon, color: Color) {
                 close()
             }
             drawPath(path, color, style = stroke)
+        }
+        ToolIcon.LOCAL -> {
+            drawCircle(color, radius = s * 0.36f, center = p(0.5f, 0.5f), style = stroke)
+            drawCircle(color.copy(alpha = 0.55f), radius = s * 0.18f, center = p(0.5f, 0.5f), style = stroke)
+            drawCircle(color, radius = s * 0.045f, center = p(0.5f, 0.5f))
         }
         ToolIcon.CROP -> {
             drawLine(color, p(0.3f, 0.1f), p(0.3f, 0.7f), strokeWidth = w, cap = StrokeCap.Round)

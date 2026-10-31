@@ -95,6 +95,7 @@ Params Params::fromArray(const float* a) {
         p.gradeSat[z] = f[10 + z * 2];
     }
     p.gradeBalance = f[15];
+    for (int i = 0; i < Params::kMaskCount * Params::kMaskFloats; ++i) p.masks[i] = a[Params::kMaskStart + i];
     return p;
 }
 
@@ -124,6 +125,16 @@ Developer::Developer(const Params& p) : p_(p) {
     for (float v : p.hsl) hs += std::fabs(v);
     hslActive_ = hs > 0.f;
 
+    nMask_ = 0;
+    for (int m = 0; m < Params::kMaskCount; ++m) {
+        const float* k = p.masks + m * Params::kMaskFloats;
+        bool any = false;
+        for (int i = 7; i < 13; ++i) any = any || k[i] != 0.f;
+        if (k[0] >= 0.5f && any) {
+            std::memcpy(mask_[nMask_], k, sizeof(float) * Params::kMaskFloats);
+            ++nMask_;
+        }
+    }
     spatial_ = p.hasSpatial();
     grade_ = p.gradeSat[0] > 0.f || p.gradeSat[1] > 0.f || p.gradeSat[2] > 0.f;
 }
@@ -211,6 +222,31 @@ float gridNoise(int x, int y) {
 
 }  // namespace
 
+namespace {
+
+// Peso (0..1) de una máscara en la posición (u, v) de la imagen final.
+float maskWeight(const float* m, float u, float v) {
+    int type = static_cast<int>(std::floor(m[0] + 0.5f));
+    float w;
+    if (type == 1) {
+        float dx = m[3] - m[1], dy = m[4] - m[2];
+        float len2 = std::max(dx * dx + dy * dy, 1e-6f);
+        float t = ((u - m[1]) * dx + (v - m[2]) * dy) / len2;
+        w = 1.f - smoothstep(0.f, 1.f, t);
+    } else if (type == 2) {
+        float rx = std::max(m[3], 1e-3f), ry = std::max(m[4], 1e-3f);
+        float ex = (u - m[1]) / rx, ey = (v - m[2]) / ry;
+        float e = std::sqrt(ex * ex + ey * ey);
+        float f = std::min(1.f, std::max(m[5], 0.02f));
+        w = 1.f - smoothstep(1.f - f, 1.f, e);
+    } else {
+        return 0.f;
+    }
+    return m[6] > 0.5f ? 1.f - w : w;
+}
+
+}  // namespace
+
 void Developer::pixel(float r, float g, float b, const float* aux, float u, float v,
                       uint8_t* out) const {
     static const float* lut = encodeLut();
@@ -257,15 +293,36 @@ void Developer::pixel(float r, float g, float b, const float* aux, float u, floa
         }
     }
 
-    for (int i = 0; i < 3; ++i) c[i] *= gain_[i];
+    // Ediciones locales: los ajustes de cada máscara se suman, ponderados, a los globales.
+    float exposure = p_.exposure, contrast = p_.contrast, highlights = p_.highlights;
+    float shadows = p_.shadows, temperature = p_.temperature, saturation = p_.saturation;
+    float hlk = hlk_;
+    if (nMask_ > 0) {
+        for (int m = 0; m < nMask_; ++m) {
+            float w = maskWeight(mask_[m], u, v);
+            exposure += w * mask_[m][7];
+            contrast += w * mask_[m][8];
+            highlights += w * mask_[m][9];
+            shadows += w * mask_[m][10];
+            temperature += w * mask_[m][11];
+            saturation += w * mask_[m][12];
+        }
+        float ev = std::exp2(exposure);
+        c[0] *= ev * (1.f + 0.35f * temperature);
+        c[1] *= ev * (1.f - 0.25f * p_.tint);
+        c[2] *= ev * (1.f - 0.35f * temperature);
+        hlk = std::max(0.f, -highlights) * 3.f;
+    } else {
+        for (int i = 0; i < 3; ++i) c[i] *= gain_[i];
+    }
 
     // Recuperación de altas luces en lineal: compresión suave sobre la rodilla.
-    if (hlk_ > 0.f) {
+    if (hlk > 0.f) {
         constexpr float knee = 0.6f;
         for (float& v : c) {
             if (v > knee) {
                 float t = v - knee;
-                v = knee + t / (1.f + hlk_ * t);
+                v = knee + t / (1.f + hlk * t);
             }
         }
     }
@@ -275,11 +332,11 @@ void Developer::pixel(float r, float g, float b, const float* aux, float u, floa
     // Tonos por luminancia en espacio codificado.
     float y = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
     float y2 = y;
-    y2 += p_.shadows * 0.30f * (1.f - smoothstep(0.10f, 0.65f, y)) * smoothstep(0.f, 0.08f, y);
-    y2 += p_.highlights * 0.25f * smoothstep(0.35f, 0.90f, y);
+    y2 += shadows * 0.30f * (1.f - smoothstep(0.10f, 0.65f, y)) * smoothstep(0.f, 0.08f, y);
+    y2 += highlights * 0.25f * smoothstep(0.35f, 0.90f, y);
     y2 += p_.whites * 0.20f * smoothstep(0.60f, 1.00f, y);
     y2 += p_.blacks * 0.20f * (1.f - smoothstep(0.f, 0.35f, y));
-    y2 = 0.5f + (y2 - 0.5f) * (1.f + 0.8f * p_.contrast);
+    y2 = 0.5f + (y2 - 0.5f) * (1.f + 0.8f * contrast);
     y2 = clamp01(y2);
     if (curveActive_) y2 = curveAt(y2);
 
@@ -291,7 +348,7 @@ void Developer::pixel(float r, float g, float b, const float* aux, float u, floa
     float mx = std::max(c[0], std::max(c[1], c[2]));
     float mn = std::min(c[0], std::min(c[1], c[2]));
     float chroma = clamp01(mx - mn);
-    float sat = (1.f + p_.saturation) * (1.f + p_.vibrance * (1.f - chroma));
+    float sat = (1.f + saturation) * (1.f + p_.vibrance * (1.f - chroma));
     if (sat < 0.f) sat = 0.f;
     for (float& v : c) v = y2 + (v - y2) * sat;
 
