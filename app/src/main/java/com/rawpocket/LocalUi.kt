@@ -1,10 +1,12 @@
 package com.rawpocket
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -179,5 +181,24 @@ private fun LocalSliderRow(adj: LocalAdjustment, value: Float, slot: Int, k: Int
             range = adj.min..adj.max,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/** Perfiles de color: el aspecto base de la foto, antes de los deslizadores. */
+@Composable
+fun ProfilePicker(selected: Int, onSelect: (Int) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        Text("Perfil", color = Palette.TextSecondary, fontSize = 12.sp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            EditParams.PROFILE_NAMES.forEachIndexed { i, name ->
+                SoftButton(name, { onSelect(i) }, accent = i == selected)
+            }
+        }
     }
 }

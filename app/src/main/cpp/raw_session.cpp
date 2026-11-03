@@ -68,7 +68,7 @@ int decode(const char* path, bool half, Decoded& out) {
     P.gamm[0] = 1.0;     // salida lineal: la curva tonal la aplica nuestro motor
     P.gamm[1] = 1.0;
     P.no_auto_bright = 1;
-    P.highlight = 0;
+    P.highlight = 2;  // mezcla canales recortados: luces sin tintes rosados
     P.user_qual = 3;  // AHD
     P.half_size = half ? 1 : 0;
 
@@ -118,6 +118,7 @@ int workerThreads() {
 int openSession(const std::string& path, int previewLongEdge, std::unique_ptr<Session>& out) {
     auto s = std::make_unique<Session>();
     s->path = path;
+    s->still = isJpegOrPng(path.c_str());
 
     Decoded dec;
     int rc;

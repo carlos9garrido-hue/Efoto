@@ -16,7 +16,7 @@ uniform sampler2D uTex;      // RGB lineal (sRGB primarios), 1.0 = blanco
 //   51-53 efectos: viñeta (cantidad, punto medio), grano
 //   54-60 gradación: tono y saturación de sombras, medios y luces; balance
 //   61-112 ediciones locales: 4 máscaras x 13 valores (ver Params::masks en develop.h)
-uniform float uParams[113];
+uniform float uParams[114];
 // Capas auxiliares para los efectos con vecinos (ver Aux en develop.h):
 //   uAuxA: rgb = imagen con desenfoque pequeño, a = luminancia con desenfoque grande
 //   uAuxB: r = luminancia con desenfoque medio, g = mínimo de canales con desenfoque grande
@@ -281,6 +281,23 @@ void main() {
     vec3 lo = 12.92 * c;
     vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
     c = mix(hi, lo, lessThanEqual(c, vec3(0.0031308)));
+
+    // Perfil de color: curva en S sobre la luminancia, elevación de negros y saturación base.
+    int prof = int(floor(uParams[113] + 0.5));
+    if (uParams[113] > -0.5 && prof >= 0 && prof < 8 && prof != 1) {
+        float pk = 0.30, pl = 0.0, ps = 1.08;
+        if (prof == 2) { pk = 0.42; ps = 1.30; }
+        else if (prof == 3) { pk = 0.38; ps = 1.20; }
+        else if (prof == 4) { pk = 0.16; pl = 0.008; ps = 0.94; }
+        else if (prof == 5) { pk = -0.20; pl = 0.03; ps = 0.88; }
+        else if (prof == 6) { ps = 0.0; }
+        else if (prof == 7) { pk = 0.55; ps = 0.0; }
+        float y0 = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        float yp = y0 - pk * y0 * (1.0 - y0) * (1.0 - 2.0 * y0);
+        yp = pl + yp * (1.0 - pl);
+        c *= (yp + 0.002) / (y0 + 0.002);
+        c = clamp(vec3(yp) + (c - vec3(yp)) * ps, 0.0, 1.0);
+    }
 
     // Tonos por luminancia en espacio codificado.
     float y = dot(c, vec3(0.2126, 0.7152, 0.0722));

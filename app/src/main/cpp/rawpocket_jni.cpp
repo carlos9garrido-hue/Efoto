@@ -20,6 +20,12 @@
 
 namespace {
 
+rp::Params paramsFor(const rp::Session& s, const float* a) {
+    rp::Params p = rp::Params::fromArray(a);
+    if (s.still) p.profile = -1.f;  // JPG/PNG: sin perfil de color
+    return p;
+}
+
 std::string toStd(JNIEnv* env, jstring s) {
     const char* c = env->GetStringUTFChars(s, nullptr);
     std::string out(c ? c : "");
@@ -102,7 +108,7 @@ Java_com_rawpocket_RawNative_nativeHistogram(JNIEnv* env, jobject, jlong h, jflo
     float p[rp::Params::kCount];
     env->GetFloatArrayRegion(jparams, 0, rp::Params::kCount, p);
     int32_t bins[1024];
-    rp::histogram8(s->small.data(), s->sw, s->sh, rp::Params::fromArray(p), bins);
+    rp::histogram8(s->small.data(), s->sw, s->sh, paramsFor(*s, p), bins);
     env->SetIntArrayRegion(jout, 0, 1024, reinterpret_cast<const jint*>(bins));
     return JNI_TRUE;
 }
@@ -128,7 +134,7 @@ Java_com_rawpocket_RawNative_nativeSampleWb(JNIEnv* env, jobject, jlong h, jfloa
     float p[rp::Params::kCount];
     env->GetFloatArrayRegion(jparams, 0, rp::Params::kCount, p);
     float rgb[3];
-    if (!rp::samplePatchLinear(s->small.data(), s->sw, s->sh, rp::Params::fromArray(p), u, v, rgb))
+    if (!rp::samplePatchLinear(s->small.data(), s->sw, s->sh, paramsFor(*s, p), u, v, rgb))
         return JNI_FALSE;
     float t, tint;
     if (!rp::whiteBalanceFromRgb(rgb[0], rgb[1], rgb[2], t, tint)) return JNI_FALSE;
@@ -194,7 +200,7 @@ Java_com_rawpocket_RawNative_nativeRender(JNIEnv* env, jobject, jlong h, jfloatA
     void* pixels = nullptr;
     if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS)
         return JNI_FALSE;
-    rp::developToRgba(s->preview.data(), s->pw, s->ph, rp::Params::fromArray(p),
+    rp::developToRgba(s->preview.data(), s->pw, s->ph, paramsFor(*s, p),
                       static_cast<uint8_t*>(pixels), static_cast<int>(info.stride),
                       rp::workerThreads());
     AndroidBitmap_unlockPixels(env, bitmap);
@@ -212,7 +218,7 @@ Java_com_rawpocket_RawNative_nativeExport(JNIEnv* env, jobject, jlong h, jfloatA
 
     float p[rp::Params::kCount];
     env->GetFloatArrayRegion(jparams, 0, rp::Params::kCount, p);
-    return rp::exportImage(*s, rp::Params::fromArray(p), toStd(env, joutPath), quality, maxEdge,
+    return rp::exportImage(*s, paramsFor(*s, p), toStd(env, joutPath), quality, maxEdge,
                            format == 1 ? rp::kFormatPng : rp::kFormatJpeg);
 }
 

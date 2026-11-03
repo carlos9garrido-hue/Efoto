@@ -17,7 +17,9 @@ struct Params {
     static constexpr int kMaskStart = kFxStart + 16;                       // 61
     static constexpr int kMaskCount = 4;       // máscaras locales (degradados)
     static constexpr int kMaskFloats = 13;     // valores por máscara, ver Mask más abajo
-    static constexpr int kCount = kMaskStart + kMaskCount * kMaskFloats;   // 113
+    static constexpr int kProfile = kMaskStart + kMaskCount * kMaskFloats; // 113
+    static constexpr int kCount = kProfile + 1;                            // 114
+    static constexpr int kProfiles = 8;  // Estándar, Neutro, Vívido, Paisaje, Retrato, Plano, Mono, Mono duro
     float exposure = 0;     // EV, -5 .. +5
     float contrast = 0;     // -1 .. +1
     float highlights = 0;   // -1 .. +1
@@ -56,6 +58,10 @@ struct Params {
     //   5 suavizado del borde (radial, 0..1)   6 invertir (>0.5)
     //   7-12 ajustes locales: exposición (EV), contraste, luces, sombras, temperatura, saturación
     float masks[kMaskCount * kMaskFloats] = {};
+
+    // Perfil de color (aspecto base de la foto, antes de los deslizadores): índice 0..kProfiles-1,
+    // 0 = Estándar. Un valor negativo lo desactiva (se usa en JPG/PNG, que ya traen su aspecto).
+    float profile = 0;
 
     bool hasLocal() const {
         for (int m = 0; m < kMaskCount; ++m) {
@@ -126,6 +132,8 @@ private:
     float gain_[3];
     float hlk_;
     bool curveActive_ = false;
+    bool profOn_ = false;
+    float profK_ = 0, profLift_ = 0, profSat_ = 1;
     bool hslActive_ = false;
     float curveY_[Params::kCurvePoints];
     float curveM_[Params::kCurvePoints];  // tangentes (monótonas, estilo PCHIP)

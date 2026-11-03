@@ -233,12 +233,15 @@ private fun ReadyScreen(
                     ) {
                         if (isPresets) PresetsPanel(presets, canPaste, hasEdits = !state.params.isDefault, actions = presetActions)
                         else when (group) {
-                            Group.COLOR -> SoftButton(
-                                if (picking) "Toca un punto gris o blanco…" else "Cuentagotas de balance de blancos",
-                                { picking = !picking },
-                                accent = picking,
-                                modifier = Modifier.padding(vertical = 8.dp),
-                            )
+                            Group.COLOR -> {
+                                if (state.photo?.still != true) ProfilePicker(state.params.profile, tools.onProfile)
+                                SoftButton(
+                                    if (picking) "Toca un punto gris o blanco…" else "Cuentagotas de balance de blancos",
+                                    { picking = !picking },
+                                    accent = picking,
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                )
+                            }
                             Group.CURVE -> CurvePreview(state.params)
                             Group.HSL -> BandPicker(band, state.params) { band = it }
                             Group.CROP -> CropPanel(state.params, crop)
@@ -271,6 +274,7 @@ private fun ReadyScreen(
 private fun EditParams.groupChanged(group: Group): Boolean =
     if (group == Group.CROP) hasGeometry
     else if (group == Group.LOCAL) hasMasks
+    else if (group == Group.COLOR) profile != 0 || Adjustment.entries.any { it.group == group && it.get(this) != 0f }
     else Adjustment.entries.any { it.group == group && it.get(this) != 0f }
 
 @Composable

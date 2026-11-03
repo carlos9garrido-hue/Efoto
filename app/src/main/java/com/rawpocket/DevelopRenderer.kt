@@ -15,7 +15,7 @@ import kotlin.math.roundToInt
  * Vista previa lista para la GPU: RGBA half-float lineal (8 bytes por píxel) en un búfer directo.
  * Es independiente de la sesión nativa, así que puede vivir en el hilo de GL sin riesgo de carreras.
  */
-class GpuPhoto(val width: Int, val height: Int, val data: ByteBuffer) {
+class GpuPhoto(val width: Int, val height: Int, val data: ByteBuffer, val still: Boolean = false) {
     /** Capas de los efectos con vecinos; se calculan la primera vez que hacen falta. */
     @Volatile var aux: GpuAux? = null
 }
@@ -125,6 +125,7 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         // decide el encuadre. Ajuste "contain": entera, centrada, sin deformarse; el zoom y el
         // desplazamiento agrandan y mueven ese rectángulo (lo que sobresale lo recorta la pantalla).
         val values = params.copyOf()
+        if (p.still) values[PROFILE_INDEX] = -1f  // JPG/PNG: sin perfil de color
         if (aux == null) for (i in FX_FIRST..FX_LAST_SPATIAL) values[i] = 0f
         val turns = Math.floor(values[ANGLE_INDEX + 1] + 0.5).toInt() and 3
         val frameW = (if (turns and 1 == 1) p.height else p.width).toFloat()
@@ -163,7 +164,7 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         if (view.splitOn) {
             // Comparación dividida: a la izquierda la foto sin ajustes (con la misma geometría),
             // a la derecha la editada. Cada mitad se dibuja recortada con scissor.
-            val original = values.copyOf().also { for (i in 0 until PARAM_COUNT) if (i !in ANGLE_INDEX..ANGLE_INDEX + 5) it[i] = 0f }
+            val original = values.copyOf().also { for (i in 0 until PARAM_COUNT) if (i !in ANGLE_INDEX..ANGLE_INDEX + 5) it[i] = 0f }.also { it[PROFILE_INDEX] = if (p.still) -1f else 0f }
             val divX = (vx + view.splitFrac * vw).roundToInt().coerceIn(0, surfaceWidth)
             GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
             GLES30.glScissor(0, 0, divX, surfaceHeight)
@@ -224,9 +225,10 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
 
     private companion object {
         const val TAG = "RawPocketGL"
-        const val PARAM_COUNT = 113  // igual que Params::kCount en develop.h
+        const val PARAM_COUNT = 114  // igual que Params::kCount en develop.h
         const val FX_FIRST = 45  // Params::kFxStart: claridad..ruido (color) son los efectos con vecinos
         const val FX_LAST_SPATIAL = 50
+        const val PROFILE_INDEX = 113  // Params::kProfile
         const val ANGLE_INDEX = 39  // Params::kGeomStart: enderezado, giros, recorte L/T/R/B
         const val BG = 0x0A / 255f
     }

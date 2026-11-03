@@ -1,5 +1,6 @@
 // Prueba en PC del núcleo nativo (sin Android): decodifica un DNG sintético, revela y exporta.
 // Uso: test_host <archivo.dng> <archivo_o6.dng> <directorio_salida>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -277,6 +278,7 @@ int main(int argc, char** argv) {
     std::printf("[Developer] pixel por pixel\n");
     {
         rp::Params neutral;
+        neutral.profile = 1;  // Neutro: sin curva ni saturación de perfil
         rp::Developer dev(neutral);
         uint8_t o[3];
         dev.pixel(0.18f, 0.18f, 0.18f, o);
@@ -285,6 +287,33 @@ int main(int argc, char** argv) {
         CHECK(o[0] == 0 && o[1] == 0 && o[2] == 0, "negro -> 0");
         dev.pixel(1, 1, 1, o);
         CHECK(o[0] == 255 && o[1] == 255 && o[2] == 255, "blanco -> 255");
+
+        // Perfiles de color
+        {
+            auto px = [](float prof, float r, float g, float b, uint8_t* out) {
+                rp::Params q; q.profile = prof;
+                rp::Developer(q).pixel(r, g, b, out);
+            };
+            uint8_t n[3], st[3], viv[3], mono[3], off[3], dark[3], flat[3], neu[3], w[3];
+            px(1, 0.4f, 0.1f, 0.05f, n);
+            px(-1, 0.4f, 0.1f, 0.05f, off);
+            CHECK(n[0] == off[0] && n[1] == off[1] && n[2] == off[2], "perfil Neutro = sin perfil (-1)");
+            px(0, 0.4f, 0.1f, 0.05f, st);
+            px(2, 0.4f, 0.1f, 0.05f, viv);
+            auto chroma = [](const uint8_t* c) { return std::max({c[0], c[1], c[2]}) - std::min({c[0], c[1], c[2]}); };
+            CHECK(chroma(st) > chroma(n), "Estándar es algo más saturado que Neutro");
+            CHECK(chroma(viv) > chroma(st), "Vívido es más saturado que Estándar");
+            px(6, 0.4f, 0.1f, 0.05f, mono);
+            CHECK(mono[0] == mono[1] && mono[1] == mono[2], "Mono: R = G = B");
+            px(0, 0.05f, 0.05f, 0.05f, dark); px(1, 0.05f, 0.05f, 0.05f, neu);
+            CHECK(dark[0] < neu[0], "Estándar profundiza las sombras (curva en S)");
+            px(5, 0.f, 0.f, 0.f, flat);
+            CHECK(flat[0] > 0, "Plano eleva los negros");
+            px(2, 1.f, 1.f, 1.f, w);
+            CHECK(w[0] == 255 && w[1] == 255 && w[2] == 255, "blanco sigue siendo blanco con cualquier perfil");
+            px(0, 0.f, 0.f, 0.f, w);
+            CHECK(w[0] == 0, "negro sigue siendo negro con Estándar");
+        }
 
         rp::Params up; up.exposure = 1.f;
         uint8_t o2[3];

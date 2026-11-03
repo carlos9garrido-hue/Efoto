@@ -23,6 +23,7 @@ Hecho:
 - **Revelado en GPU** (OpenGL ES 3.0): la vista previa es una textura half-float y los sliders solo envían 10 números al shader (`app/src/main/assets/shaders/develop.frag`). Sin copias de píxeles CPU↔GPU al editar.
 - La exportación usa el mismo algoritmo en C++ (CPU) a resolución completa; una prueba automática garantiza que ambos coinciden (diferencia máxima de 1 nivel de 8 bits en 120 combinaciones de los 45 parámetros).
 - Ediciones guardadas como JSON por foto (el RAW nunca se modifica).
+- **Perfiles de color** para RAW, como los de Lightroom (Estándar, Neutro, Vívido, Paisaje, Retrato, Plano, Mono, Mono duro): curva en S, negros y saturación base antes de los deslizadores. Los JPG/PNG no lo usan porque ya traen su aspecto.
 - **Ediciones locales**: hasta 4 máscaras (degradado lineal o radial, con borde suave e inversión), cada una con exposición, contraste, luces altas, sombras, temperatura y saturación; se mueven arrastrando sus puntos sobre la foto.
 - Exportación JPEG o PNG a resolución completa a `Pictures/Efoto`.
 - Mantener pulsada la foto muestra el original.

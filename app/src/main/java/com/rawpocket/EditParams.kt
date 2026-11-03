@@ -149,6 +149,11 @@ class EditParams private constructor(val values: List<Float>) {
 
     val isDefault: Boolean get() = values.all { it == 0f }
 
+    /** Índice del perfil de color (0 = Estándar). */
+    val profile: Int get() = values[PROFILE].roundToInt().coerceIn(0, PROFILE_NAMES.size - 1)
+
+    fun withProfile(i: Int): EditParams = with(PROFILE, i.coerceIn(0, PROFILE_NAMES.size - 1).toFloat())
+
     /** Giros de 90° en sentido horario (0..3). */
     val rotation: Int get() = values[ROTATE].roundToInt() and 3
 
@@ -238,9 +243,12 @@ class EditParams private constructor(val values: List<Float>) {
         const val MASK_START = Adjustment.FX_START + Adjustment.FX_COUNT  // 61
         const val MASK_COUNT = 4
         const val MASK_FLOATS = 13
-        const val ASPECT = MASK_START + MASK_COUNT * MASK_FLOATS  // 113: solo la usa la app
+        const val PROFILE = MASK_START + MASK_COUNT * MASK_FLOATS  // 113: perfil de color (0 = Estándar)
+        const val ASPECT = PROFILE + 1                            // 114: solo la usa la app
         const val SIZE = ASPECT + 1
         const val ENGINE_COUNT = ASPECT  // lo que lee el motor (Params::kCount)
+        /** Perfiles de color, en el orden del motor (Params::kProfiles). */
+        val PROFILE_NAMES = listOf("Estándar", "Neutro", "Vívido", "Paisaje", "Retrato", "Plano", "Mono", "Mono duro")
         const val MAX_ANGLE = 45f
         private val GEO_KEYS = listOf("angle", "rotate90", "crop_l", "crop_t", "crop_r", "crop_b", "aspect")
 

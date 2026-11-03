@@ -21,7 +21,7 @@ const frag = fs.readFileSync(path.join(SHADERS, 'develop.frag'), 'utf8');
 const inFile = process.env.PARITY_IMAGE || path.join(work, 'in.rgb16');
 if (!process.env.PARITY_IMAGE) execFileSync('python3', [path.join(__dirname, 'gen_image.py'), inFile]);
 
-// Orden de los 113 parámetros (igual que Params en develop.h)
+// Orden de los 114 parámetros (igual que Params en develop.h)
 const names = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temperature', 'tint', 'vibrance', 'saturation'];
 for (let i = 0; i < 5; i++) names.push(`curve${i}`);
 const bands = ['rojo', 'naranja', 'amarillo', 'verde', 'aqua', 'azul', 'purpura', 'magenta'];
@@ -32,7 +32,8 @@ names.push('vigAmount', 'vigMid', 'grain');  // efectos (51-53)
 names.push('shHue', 'shSat', 'midHue', 'midSat', 'hiHue', 'hiSat', 'balance');  // gradación (54-60)
 const MASK_FIELDS = ['type', 'x1', 'y1', 'x2', 'y2', 'feather', 'invert', 'exp', 'con', 'hi', 'sh', 'temp', 'sat'];
 for (let m = 0; m < 4; m++) for (const f of MASK_FIELDS) names.push(`m${m}${f}`);  // ediciones locales (61-112)
-const N = names.length;  // 113
+names.push('profile');  // perfil de color (113)
+const N = names.length;  // 114
 const HUE = new Set([54, 56, 58]);
 const POSITIVE = new Set([48, 49, 50, 53, 55, 57, 59]);  // solo tienen efecto con valores > 0
 
@@ -77,6 +78,9 @@ cases.push({ name: 'local radial invertida', p: geo(rad(0, 0.4, 0.6, 0.4, 0.4, 1
 cases.push({ name: 'local radial borde duro', p: geo(rad(0, 0.5, 0.5, 0.3, 0.3, 0.0, { exp: 0.7, hi: -0.5 })) });
 cases.push({ name: 'local 4 máscaras', p: geo({ ...lin(0, 0, 0, 0, 0.6, { exp: -0.6 }), ...rad(1, 0.3, 0.7, 0.3, 0.25, 0.5, { sat: 0.7, temp: 0.3 }), ...rad(2, 0.8, 0.3, 0.2, 0.3, 0.8, { exp: 0.5, sh: 0.5 }, 1), ...lin(3, 1, 0, 0.3, 1, { con: -0.5, hi: -0.4 }) }) });
 cases.push({ name: 'local + global + giro', p: geo({ exposure: 0.4, contrast: 0.2, shadows: 0.3, ...lin(0, 0, 0, 0, 1, { exp: -0.8 }), rotate90: 1, angle: 8, cropL: 0.1, cropR: 0.15, cropT: 0.05, cropB: 0.2 }) });
+for (let k = -1; k < 8; k++) cases.push({ name: `perfil ${k}`, p: geo({ profile: k, exposure: 0.3, shadows: 0.3, highlights: -0.3 }) });
+cases.push({ name: 'perfil vívido + color + local', p: geo({ profile: 2, vibrance: 0.4, saturation: 0.3, 'rojo-sat': -0.4, ...rad(0, 0.5, 0.5, 0.4, 0.4, 0.5, { exp: 0.6 }) }) });
+cases.push({ name: 'perfil mono + gradación', p: geo({ profile: 6, shHue: 220, shSat: 0.7, hiHue: 40, hiSat: 0.6, clarity: 0.4 }) });
 cases.push({ name: 'local con ceros', p: geo({ ...mk(0, { type: 1, x1: 0, y1: 0, x2: 1, y2: 1 }), ...mk(1, { type: 2, x1: .5, y1: .5, x2: .3, y2: .3, feather: .5 }) }) });
 cases.push({ name: 'local + efectos', p: geo({ clarity: 0.5, vigAmount: -0.4, grain: 0.3, shSat: 0.4, shHue: 210, ...rad(0, 0.5, 0.5, 0.4, 0.4, 0.5, { exp: 0.6, temp: -0.4 }) }) });
 // Combinaciones pseudoaleatorias reproducibles

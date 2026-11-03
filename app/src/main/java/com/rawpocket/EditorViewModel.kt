@@ -179,7 +179,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             fileName = name,
             info = PhotoInfo.parse(RawNative.nativeInfo(h)),
             params = params,
-            photo = GpuPhoto(w, ht, data),
+            photo = GpuPhoto(w, ht, data, still = looksLikeStill(file)),
         )
     }
 
@@ -232,10 +232,33 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             var p = st.params
             if (group == Group.CROP) p = p.withoutGeometry()
             else if (group == Group.LOCAL) for (m in 0 until EditParams.MASK_COUNT) p = p.withMask(m, LocalMask())
-            else Adjustment.entries.filter { it.group == group }.forEach { p = it.set(p, 0f) }
+            else {
+                Adjustment.entries.filter { it.group == group }.forEach { p = it.set(p, 0f) }
+                if (group == Group.COLOR) p = p.withProfile(0)
+            }
             st.copy(params = p)
         }
         onEdited()
+    }
+
+    // ---------------------------------------------------------------- perfil de color
+
+    /** Elige el perfil de color (aspecto base de los RAW). */
+    fun setProfile(index: Int) {
+        if (_state.value.status != Status.READY) return
+        remember(null)
+        _state.update { it.copy(params = it.params.withProfile(index)) }
+        onEdited()
+    }
+
+    /** ¿Es un JPEG o PNG? (por su cabecera; esos archivos ya traen su aspecto, sin perfil de color). */
+    private fun looksLikeStill(file: File): Boolean = try {
+        val h = ByteArray(4)
+        val n = file.inputStream().use { it.read(h) }
+        n >= 3 && ((h[0] == 0xFF.toByte() && h[1] == 0xD8.toByte() && h[2] == 0xFF.toByte()) ||
+            (n >= 4 && h[0] == 0x89.toByte() && h[1] == 0x50.toByte() && h[2] == 0x4E.toByte() && h[3] == 0x47.toByte()))
+    } catch (e: IOException) {
+        false
     }
 
     // ---------------------------------------------------------------- ediciones locales

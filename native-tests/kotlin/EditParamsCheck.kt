@@ -14,7 +14,7 @@ fun main() {
     check(all.filter { it.group == Group.HSL }.all { it.band != null } && all.filter { it.group != Group.HSL }.all { it.band == null }, "solo HSL tiene banda")
 
     var p = EditParams()
-    check(p.isDefault && p.toFloatArray().size == 114 && p.toFloatArray().all { it == 0f }, "por defecto: 114 ceros (55 ajustes + 6 de geometría + 52 de máscaras + proporción)")
+    check(p.isDefault && p.toFloatArray().size == 115 && p.toFloatArray().all { it == 0f }, "por defecto: 115 ceros (55 ajustes + 6 de geometría + 52 de máscaras + perfil + proporción)")
     val exp = all[0]; val blue = all.first { it.name == "blue_sat" }; val c2 = all.first { it.name == "curve2" }
     p = exp.set(p, 1.5f); p = blue.set(p, -0.4f); p = c2.set(p, 0.2f)
     check(!p.isDefault && p.toFloatArray()[0] == 1.5f && p.toFloatArray()[15 + 5 * 3 + 1] == -0.4f && p.toFloatArray()[12] == 0.2f, "set escribe en la posición correcta del arreglo")
@@ -40,8 +40,8 @@ fun main() {
     check(inc.zipWithNext().all { (a, b) -> b >= a - 1e-6f }, "curva creciente se mantiene monótona (sin ondulaciones)")
 
     // ---- Geometría: giro, enderezado y recorte automático
-    check(EditParams.ANGLE == 39 && EditParams.ROTATE == 40 && EditParams.CROP_L == 41 && EditParams.CROP_B == 44 && EditParams.ASPECT == 113 && EditParams.SIZE == 114 && EditParams.ENGINE_COUNT == 113 && EditParams.MASK_START == 61,
-        "posiciones 39..44 = geometría; 45..60 efectos; 61..112 máscaras (como Params en develop.h); 113 = proporción (solo app)")
+    check(EditParams.ANGLE == 39 && EditParams.ROTATE == 40 && EditParams.CROP_L == 41 && EditParams.CROP_B == 44 && EditParams.ASPECT == 114 && EditParams.SIZE == 115 && EditParams.ENGINE_COUNT == 114 && EditParams.PROFILE == 113 && EditParams.MASK_START == 61,
+        "posiciones 39..44 = geometría; 45..60 efectos; 61..112 máscaras (como Params en develop.h); 113 = perfil de color; 114 = proporción (solo app)")
     // ---- Detalle, efectos y gradación
     run {
         val byName = all.associateBy { it.name }
@@ -119,6 +119,14 @@ fun main() {
     val noGeo = g.withoutGeometry()
     check(!noGeo.hasGeometry && exp.get(noGeo) == 0.7f && noGeo.aspect == 0, "quitar geometría conserva el resto de las ediciones")
     check(EditParams.fromJson("angle=99.0;crop_l=5.0;rotate90=7.0")!!.let { it.angle == 45f && it.values[EditParams.CROP_L] == 0.95f && it.rotation == 3 }, "valores de geometría fuera de rango se recortan")
+    run {
+        val q = EditParams().withProfile(3)
+        check(q.profile == 3 && !q.isDefault && q.toFloatArray()[EditParams.PROFILE] == 3f, "withProfile guarda el perfil en la posición 113")
+        check(EditParams().withProfile(99).profile == EditParams.PROFILE_NAMES.size - 1 && EditParams().withProfile(-4).profile == 0, "el perfil se recorta al rango válido")
+        check(EditParams.fromJson(q.toJson())?.profile == 3, "el perfil sobrevive a guardar y leer el JSON")
+        check(EditParams().profile == 0 && EditParams().isDefault, "perfil por defecto: Estándar")
+    }
     println(if (fails == 0) "TODO BIEN" else "$fails FALLOS")
     if (fails > 0) System.exit(1)
 }
+

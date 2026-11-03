@@ -16,6 +16,7 @@ constexpr int kErrWrite = -1004;
 
 struct Session {
     std::string path;
+    bool still = false;  // JPG/PNG: ya traen su aspecto, el perfil de color no se aplica
     std::vector<uint16_t> preview;  // RGB16 lineal, orientación aplicada
     int pw = 0, ph = 0;
     std::vector<uint16_t> small;  // vista previa reducida (~512 px) para histograma y análisis

@@ -96,6 +96,7 @@ Params Params::fromArray(const float* a) {
     }
     p.gradeBalance = f[15];
     for (int i = 0; i < Params::kMaskCount * Params::kMaskFloats; ++i) p.masks[i] = a[Params::kMaskStart + i];
+    p.profile = a[Params::kProfile];
     return p;
 }
 
@@ -120,6 +121,27 @@ Developer::Developer(const Params& p) : p_(p) {
     curveM_[4] = d[3];
     for (int i = 1; i < 4; ++i)
         curveM_[i] = (d[i - 1] * d[i] <= 0.f) ? 0.f : 2.f * d[i - 1] * d[i] / (d[i - 1] + d[i]);
+
+    {
+        // Perfiles: {contraste en S, elevación de negros, saturación}
+        static const float kProf[Params::kProfiles][3] = {
+            {0.30f, 0.f, 1.08f},    // Estándar
+            {0.f, 0.f, 1.f},        // Neutro
+            {0.42f, 0.f, 1.30f},    // Vívido
+            {0.38f, 0.f, 1.20f},    // Paisaje
+            {0.16f, 0.008f, 0.94f}, // Retrato
+            {-0.20f, 0.03f, 0.88f}, // Plano
+            {0.30f, 0.f, 0.f},      // Monocromo
+            {0.55f, 0.f, 0.f},      // Monocromo duro
+        };
+        int pi = static_cast<int>(std::floor(p.profile + 0.5f));
+        profOn_ = p.profile > -0.5f && pi >= 0 && pi < Params::kProfiles && pi != 1;
+        if (profOn_) {
+            profK_ = kProf[pi][0];
+            profLift_ = kProf[pi][1];
+            profSat_ = kProf[pi][2];
+        }
+    }
 
     float hs = 0.f;
     for (float v : p.hsl) hs += std::fabs(v);
@@ -328,6 +350,16 @@ void Developer::pixel(float r, float g, float b, const float* aux, float u, floa
     }
 
     for (float& v : c) v = encode(lut, v);
+
+    // Perfil de color: curva en S sobre la luminancia, elevación de negros y saturación base.
+    if (profOn_) {
+        float y0 = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
+        float yp = y0 - profK_ * y0 * (1.f - y0) * (1.f - 2.f * y0);
+        yp = profLift_ + yp * (1.f - profLift_);
+        float sc = (yp + 0.002f) / (y0 + 0.002f);
+        for (float& v : c) v *= sc;
+        for (float& v : c) v = clamp01(yp + (v - yp) * profSat_);
+    }
 
     // Tonos por luminancia en espacio codificado.
     float y = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];

@@ -49,6 +49,7 @@ class ToolActions(
     val onPickWb: (Float, Float) -> Unit,
     val onResetGroup: (Group) -> Unit,
     val local: LocalActions,
+    val onProfile: (Int) -> Unit,
 )
 
 /**
