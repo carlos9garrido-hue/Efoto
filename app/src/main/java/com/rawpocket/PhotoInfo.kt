@@ -8,6 +8,8 @@ data class PhotoInfo(
     val camera: String,
     val exposureLine: String,
     val sizeLine: String,
+    /** Sensibilidad ISO (0 si no se conoce). */
+    val iso: Int = 0,
 ) {
     companion object {
         /** Formato: "marca|modelo|iso|obturador|apertura|focal|ancho|alto" */
@@ -38,7 +40,7 @@ data class PhotoInfo(
                 String.format(Locale.US, "%d × %d · %.1f MP", w, h, w.toLong() * h / 1_000_000.0)
             else ""
 
-            return PhotoInfo(camera, parts.joinToString(" · "), size)
+            return PhotoInfo(camera, parts.joinToString(" · "), size, d(2).roundToInt())
         }
     }
 }

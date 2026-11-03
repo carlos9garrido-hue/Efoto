@@ -126,6 +126,14 @@ fun main() {
         check(EditParams.fromJson(q.toJson())?.profile == 3, "el perfil sobrevive a guardar y leer el JSON")
         check(EditParams().profile == 0 && EditParams().isDefault, "perfil por defecto: Estándar")
     }
+    run {
+        val low = EditParams.rawDefaults(100); val mid = EditParams.rawDefaults(1600); val hi = EditParams.rawDefaults(25600)
+        val sharpen = all.first { it.name == "sharpen" }; val nrL = all.first { it.name == "nr_luma" }; val nrC = all.first { it.name == "nr_color" }
+        check(sharpen.get(low) == 0.25f && nrC.get(low) == 0.25f && nrL.get(low) == 0f, "RAW nuevo con ISO bajo: nitidez 25, ruido de color 25, luminancia 0")
+        check(nrL.get(mid) in 0.30f..0.45f && nrL.get(hi) == 0.45f, "la reducción de luminancia crece con el ISO y tiene tope")
+        check(EditParams.fromJson(mid.toJson()) == mid, "los valores iniciales sobreviven a guardar y leer")
+        check(EditParams.rawDefaults(0).let { nrL.get(it) == 0f }, "sin ISO conocido no se reduce luminancia")
+    }
     println(if (fails == 0) "TODO BIEN" else "$fails FALLOS")
     if (fails > 0) System.exit(1)
 }

@@ -171,15 +171,17 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val key = editKeyFor(name, file.length())
         editKey = key
         rememberRecent(uri, name, key, h)
-        val params = loadEdits(key) ?: EditParams()
+        val info = PhotoInfo.parse(RawNative.nativeInfo(h))
+        val still = looksLikeStill(file)
+        val params = loadEdits(key) ?: if (still) EditParams() else EditParams.rawDefaults(info.iso)
         clearHistory()
 
         return UiState(
             status = Status.READY,
             fileName = name,
-            info = PhotoInfo.parse(RawNative.nativeInfo(h)),
+            info = info,
             params = params,
-            photo = GpuPhoto(w, ht, data, still = looksLikeStill(file)),
+            photo = GpuPhoto(w, ht, data, still = still),
         )
     }
 
@@ -589,7 +591,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             input.use { i -> src.outputStream().use { o -> i.copyTo(o) } }
             h = RawNative.nativeOpen(src.absolutePath, BATCH_PREVIEW_EDGE)
             if (h <= 0L) return false
-            val params = loadEdits(editKeyFor(item.name, src.length())) ?: EditParams()
+            val params = loadEdits(editKeyFor(item.name, src.length()))
+                ?: if (looksLikeStill(src)) EditParams()
+                else EditParams.rawDefaults(PhotoInfo.parse(RawNative.nativeInfo(h)).iso)
             val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, options.quality, options.maxEdge, options.format)
             if (rc != 0) return false
             saveToGallery(tmp, "${item.name.substringBeforeLast('.', item.name)}_Efoto.${options.extension}", options.mime)

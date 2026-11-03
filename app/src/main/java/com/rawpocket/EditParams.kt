@@ -250,6 +250,20 @@ class EditParams private constructor(val values: List<Float>) {
         /** Perfiles de color, en el orden del motor (Params::kProfiles). */
         val PROFILE_NAMES = listOf("Estándar", "Neutro", "Vívido", "Paisaje", "Retrato", "Plano", "Mono", "Mono duro")
         const val MAX_ANGLE = 45f
+
+        /**
+         * Punto de partida de un RAW sin ediciones guardadas, como hace Lightroom: algo de nitidez y
+         * de reducción de ruido de color, y reducción de luminancia que crece con el ISO (los sensores
+         * de la Nikon D3200/D3400 empiezan a ensuciarse hacia ISO 1600).
+         */
+        fun rawDefaults(iso: Int): EditParams {
+            val lumaNr = (((iso - 400) / 3200f).coerceIn(0f, 0.45f) * 100f).roundToInt() / 100f
+            var p = EditParams()
+            p = p.with(Adjustment.FX_START + 3, 0.25f)
+            p = p.with(Adjustment.FX_START + 4, lumaNr)
+            p = p.with(Adjustment.FX_START + 5, 0.25f)
+            return p
+        }
         private val GEO_KEYS = listOf("angle", "rotate90", "crop_l", "crop_t", "crop_r", "crop_b", "aspect")
 
         /** Lee ediciones guardadas (también las de versiones anteriores, sin curva/HSL/geometría). */
