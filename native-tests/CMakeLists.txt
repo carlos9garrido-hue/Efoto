@@ -27,12 +27,12 @@ target_compile_options(raw_static PRIVATE -w)
 target_link_libraries(raw_static ZLIB::ZLIB Threads::Threads)
 
 add_executable(test_host
-    test_host.cpp ${CPP}/develop.cpp ${CPP}/raw_session.cpp ${CPP}/image_input.cpp)
+    test_host.cpp ${CPP}/develop.cpp ${CPP}/segment.cpp ${CPP}/raw_session.cpp ${CPP}/image_input.cpp)
 target_include_directories(test_host PRIVATE ${CPP} ${CPP}/third_party/stb)
 target_link_libraries(test_host raw_static Threads::Threads)
 
 add_executable(test_image
-    test_image.cpp ${CPP}/develop.cpp ${CPP}/raw_session.cpp ${CPP}/image_input.cpp)
+    test_image.cpp ${CPP}/develop.cpp ${CPP}/segment.cpp ${CPP}/raw_session.cpp ${CPP}/image_input.cpp)
 target_include_directories(test_image PRIVATE ${CPP} ${CPP}/third_party/stb)
 target_link_libraries(test_image raw_static Threads::Threads)
 
@@ -40,12 +40,12 @@ add_executable(test_analysis test_analysis.cpp ${CPP}/develop.cpp ${CPP}/analysi
 target_include_directories(test_analysis PRIVATE ${CPP})
 target_link_libraries(test_analysis Threads::Threads)
 
-add_executable(test_effects test_effects.cpp ${CPP}/develop.cpp)
+add_executable(test_effects test_effects.cpp ${CPP}/develop.cpp ${CPP}/segment.cpp)
 target_include_directories(test_effects PRIVATE ${CPP})
 target_link_libraries(test_effects Threads::Threads)
 
 # Volcador del motor CPU para la prueba de paridad CPU/GPU (native-tests/gpu/parity.js).
-add_executable(dump_cpu dump_cpu.cpp ${CPP}/develop.cpp)
+add_executable(dump_cpu dump_cpu.cpp ${CPP}/develop.cpp ${CPP}/segment.cpp)
 target_include_directories(dump_cpu PRIVATE ${CPP})
 target_link_libraries(dump_cpu Threads::Threads)
 
@@ -64,3 +64,8 @@ set_tests_properties(pipeline PROPERTIES DEPENDS "make_dng_normal;make_dng_o6")
 add_test(NAME imagenes_jpg_png COMMAND test_image ${CMAKE_BINARY_DIR})
 add_test(NAME analisis COMMAND test_analysis)
 add_test(NAME efectos COMMAND test_effects)
+
+# Herramienta de prueba de la selección de sujeto (ver native-tests/seg_demo.cpp).
+add_executable(seg_demo seg_demo.cpp ${CPP}/develop.cpp ${CPP}/segment.cpp)
+target_include_directories(seg_demo PRIVATE ${CPP})
+target_link_libraries(seg_demo Threads::Threads)

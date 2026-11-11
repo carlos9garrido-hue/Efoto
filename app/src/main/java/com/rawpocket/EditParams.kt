@@ -194,7 +194,7 @@ class EditParams private constructor(val values: List<Float>) {
     fun mask(m: Int): LocalMask {
         val b = MASK_START + m * MASK_FLOATS
         return LocalMask(
-            type = values[b].roundToInt().coerceIn(0, 2),
+            type = values[b].roundToInt().coerceIn(0, 3),
             x1 = values[b + 1], y1 = values[b + 2], x2 = values[b + 3], y2 = values[b + 4],
             feather = values[b + 5], invert = values[b + 6] > 0.5f,
             adjust = List(LocalMask.ADJUST_COUNT) { values[b + 7 + it] },
@@ -212,6 +212,9 @@ class EditParams private constructor(val values: List<Float>) {
     }
 
     /** ¿Alguna máscara está activa? */
+    /** ¿Alguna máscara es de sujeto? (necesita el plano de la IA de la foto) */
+    val usesSubject: Boolean get() = (0 until MASK_COUNT).any { values[MASK_START + it * MASK_FLOATS] > 2.5f }
+
     val hasMasks: Boolean get() = (0 until MASK_COUNT).any { values[MASK_START + it * MASK_FLOATS] >= 0.5f }
 
     fun with(index: Int, v: Float): EditParams =
@@ -356,6 +359,7 @@ data class LocalMask(
 ) {
     val isLinear get() = type == 1
     val isRadial get() = type == 2
+    val isSubject get() = type == 3
     val isActive get() = type != 0
 
     companion object {
@@ -363,6 +367,7 @@ data class LocalMask(
         const val NONE = 0
         const val LINEAR = 1
         const val RADIAL = 2
+        const val SUBJECT = 3   // máscara de sujeto de la IA (x1 = crecer/encoger, feather = suavidad del borde)
 
         /** Ajustes que admite cada máscara, en el orden del motor. */
         val ADJUSTMENTS = listOf(
@@ -375,7 +380,14 @@ data class LocalMask(
         )
 
         /** Una máscara nueva con una posición inicial razonable. */
+        /** Máscara del sujeto detectado (o de todo lo demás si [background]). */
+        fun subject(background: Boolean): LocalMask = LocalMask(
+            SUBJECT, x1 = 0f, feather = 0.3f, invert = background,
+            adjust = if (background) listOf(-0.7f, 0f, 0f, 0f, 0f, -0.3f) else listOf(0.3f, 0f, 0f, 0f, 0f, 0f),
+        )
+
         fun create(type: Int): LocalMask = when (type) {
+            SUBJECT -> subject(false)
             LINEAR -> LocalMask(LINEAR, 0.5f, 0.15f, 0.5f, 0.55f, adjust = listOf(-0.5f, 0f, 0f, 0f, 0f, 0f))
             else -> LocalMask(RADIAL, 0.5f, 0.5f, 0.3f, 0.25f, feather = 0.6f, adjust = listOf(0.5f, 0f, 0f, 0f, 0f, 0f))
         }

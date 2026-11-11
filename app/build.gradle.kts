@@ -49,6 +49,8 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    // El modelo ONNX ya está comprimido: se guarda tal cual en el APK
+    androidResources { noCompress += "onnx" }
 }
 
 dependencies {
@@ -63,5 +65,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // Selección de sujeto con IA en el teléfono (modelo U²-Net pequeño, licencia Apache 2.0)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

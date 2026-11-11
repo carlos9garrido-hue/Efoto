@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,6 +77,12 @@ fun PhotoCanvas(
         view.invalidate()
     }
     val pickingNow by rememberUpdatedState(picking)
+    // Tiñe de rojo la máscara de sujeto elegida mientras se edita.
+    val showSlot = if (maskSel in 0 until EditParams.MASK_COUNT && state.params.mask(maskSel).isSubject && !state.showOriginal) maskSel + 1 else 0
+    SideEffect {
+        if (view.showMask != showSlot) { view.showMask = showSlot; view.invalidate() }
+    }
+    LaunchedEffect(state.maskVersion) { view.invalidate() }
     val paramsNow by rememberUpdatedState(state.params)
     val selNow by rememberUpdatedState(maskSel)
     val density = androidx.compose.ui.platform.LocalDensity.current

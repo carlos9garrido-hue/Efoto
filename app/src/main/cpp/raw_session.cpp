@@ -180,12 +180,12 @@ int exportImage(const Session& s, const Params& p, const std::string& outPath, i
             int ow = 0, oh = 0;
             outputSize(w, h, p, ow, oh);
             rgb.resize(static_cast<size_t>(ow) * oh * 3);
-            developGeometry(src, w, h, p, rgb.data(), ow, oh, workerThreads(), ax);
+            developGeometry(src, w, h, p, rgb.data(), ow, oh, workerThreads(), ax, &s.subject);
             w = ow;
             h = oh;
         } else {
             rgb.resize(static_cast<size_t>(w) * h * 3);
-            developToRgb8(src, w, h, p, rgb.data(), workerThreads(), ax);
+            developToRgb8(src, w, h, p, rgb.data(), workerThreads(), ax, &s.subject);
         }
     }  // la imagen de 16 bits se libera antes de codificar
 

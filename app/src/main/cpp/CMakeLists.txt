@@ -33,6 +33,7 @@ add_library(rawpocket SHARED
     image_input.cpp
     analysis.cpp
     develop.cpp
+    segment.cpp
 )
 target_include_directories(rawpocket PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

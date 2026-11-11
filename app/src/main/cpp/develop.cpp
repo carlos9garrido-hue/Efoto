@@ -247,7 +247,7 @@ float gridNoise(int x, int y) {
 namespace {
 
 // Peso (0..1) de una máscara en la posición (u, v) de la imagen final.
-float maskWeight(const float* m, float u, float v) {
+float maskWeight(const float* m, float u, float v, float subj) {
     int type = static_cast<int>(std::floor(m[0] + 0.5f));
     float w;
     if (type == 1) {
@@ -261,6 +261,11 @@ float maskWeight(const float* m, float u, float v) {
         float e = std::sqrt(ex * ex + ey * ey);
         float f = std::min(1.f, std::max(m[5], 0.02f));
         w = 1.f - smoothstep(1.f - f, 1.f, e);
+    } else if (type == 3) {
+        // Máscara de sujeto: x1 (-1..1) crece o encoge la zona, feather suaviza el borde.
+        float centre = 0.5f - 0.25f * std::min(1.f, std::max(m[1], -1.f));
+        float s = 0.5f * std::min(1.f, std::max(m[5], 0.02f));
+        w = smoothstep(centre - s, centre + s, subj);
     } else {
         return 0.f;
     }
@@ -270,7 +275,7 @@ float maskWeight(const float* m, float u, float v) {
 }  // namespace
 
 void Developer::pixel(float r, float g, float b, const float* aux, float u, float v,
-                      uint8_t* out) const {
+                      uint8_t* out, float subj) const {
     static const float* lut = encodeLut();
 
     float c[3] = {r, g, b};
@@ -321,7 +326,7 @@ void Developer::pixel(float r, float g, float b, const float* aux, float u, floa
     float hlk = hlk_;
     if (nMask_ > 0) {
         for (int m = 0; m < nMask_; ++m) {
-            float w = maskWeight(mask_[m], u, v);
+            float w = maskWeight(mask_[m], u, v, subj);
             exposure += w * mask_[m][7];
             contrast += w * mask_[m][8];
             highlights += w * mask_[m][9];
@@ -572,9 +577,36 @@ void auxSample(const Aux& aux, float xs, float ys, float out[6]) {
 
 }  // namespace
 
+// Sin datos de máscara, las máscaras de sujeto se ignoran (invertidas afectarían a toda la foto).
+Params effectiveParams(const Params& p, bool haveSubject) {
+    Params q = p;
+    if (!haveSubject)
+        for (int m = 0; m < Params::kMaskCount; ++m)
+            if (q.masks[m * Params::kMaskFloats] > 2.5f) q.masks[m * Params::kMaskFloats] = 0.f;
+    return q;
+}
+
+float maskSample(const SubjectMask& m, float xs, float ys) {
+    const int w = m.w, h = m.h;
+    float fx = xs * static_cast<float>(w) - 0.5f, fy = ys * static_cast<float>(h) - 0.5f;
+    float flx = std::floor(fx), fly = std::floor(fy);
+    float tx = fx - flx, ty = fy - fly;
+    tx = tx < 1e-4f ? 0.f : (tx > 0.9999f ? 1.f : tx);
+    ty = ty < 1e-4f ? 0.f : (ty > 0.9999f ? 1.f : ty);
+    int x0 = std::min(std::max(static_cast<int>(flx), 0), w - 1);
+    int x1 = std::min(std::max(static_cast<int>(flx) + 1, 0), w - 1);
+    int y0 = std::min(std::max(static_cast<int>(fly), 0), h - 1);
+    int y1 = std::min(std::max(static_cast<int>(fly) + 1, 0), h - 1);
+    auto at = [&](int x, int y) { return static_cast<float>(m.a[static_cast<size_t>(y) * w + x]) * (1.f / 255.f); };
+    float top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+    float bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+    return top + (bottom - top) * ty;
+}
+
 void developToRgba(const uint16_t* src, int w, int h, const Params& p,
-                   uint8_t* dst, int dstStride, int threads, const Aux* aux) {
-    Developer dev(p);
+                   uint8_t* dst, int dstStride, int threads, const Aux* aux, const SubjectMask* subj) {
+    const SubjectMask* sm = (subj && !subj->empty() && p.usesSubject()) ? subj : nullptr;
+    Developer dev(effectiveParams(p, sm != nullptr));
     dev.setOutput(w, h);
     const Aux* ax = (aux && !aux->empty()) ? aux : nullptr;
     constexpr float inv = 1.f / 65535.f;
@@ -587,7 +619,8 @@ void developToRgba(const uint16_t* src, int w, int h, const Params& p,
                 float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
                 float av[6];
                 if (ax) auxSample(*ax, u, v, av);
-                dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, ax ? av : nullptr, u, v, d);
+                dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, ax ? av : nullptr, u, v, d,
+                          sm ? maskSample(*sm, u, v) : 0.f);
                 d[3] = 255;
             }
         }
@@ -647,8 +680,10 @@ void outputSize(int srcW, int srcH, const Params& p, int& outW, int& outH) {
 }
 
 void developGeometry(const uint16_t* src, int w, int h, const Params& p,
-                     uint8_t* dst, int outW, int outH, int threads, const Aux* aux) {
-    Developer dev(p);
+                     uint8_t* dst, int outW, int outH, int threads, const Aux* aux,
+                     const SubjectMask* subj) {
+    const SubjectMask* sm = (subj && !subj->empty() && p.usesSubject()) ? subj : nullptr;
+    Developer dev(effectiveParams(p, sm != nullptr));
     dev.setOutput(outW, outH);
     const Aux* ax = (aux && !aux->empty()) ? aux : nullptr;
     Geo g(w, h, p);
@@ -682,15 +717,17 @@ void developGeometry(const uint16_t* src, int w, int h, const Params& p,
                     rgb[ch] = lerp(lerp(a[ch], b[ch], tx), lerp(c[ch], e[ch], tx), ty) * inv;
                 float av[6];
                 if (ax) auxSample(*ax, xs, ys, av);
-                dev.pixel(rgb[0], rgb[1], rgb[2], ax ? av : nullptr, u, v, d);
+                dev.pixel(rgb[0], rgb[1], rgb[2], ax ? av : nullptr, u, v, d,
+                          sm ? maskSample(*sm, xs, ys) : 0.f);
             }
         }
     });
 }
 
 void developToRgb8(const uint16_t* src, int w, int h, const Params& p,
-                   uint8_t* dst, int threads, const Aux* aux) {
-    Developer dev(p);
+                   uint8_t* dst, int threads, const Aux* aux, const SubjectMask* subj) {
+    const SubjectMask* sm = (subj && !subj->empty() && p.usesSubject()) ? subj : nullptr;
+    Developer dev(effectiveParams(p, sm != nullptr));
     dev.setOutput(w, h);
     const Aux* ax = (aux && !aux->empty()) ? aux : nullptr;
     constexpr float inv = 1.f / 65535.f;
@@ -703,7 +740,8 @@ void developToRgb8(const uint16_t* src, int w, int h, const Params& p,
                 float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
                 float av[6];
                 if (ax) auxSample(*ax, u, v, av);
-                dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, ax ? av : nullptr, u, v, d);
+                dev.pixel(s[0] * inv, s[1] * inv, s[2] * inv, ax ? av : nullptr, u, v, d,
+                          sm ? maskSample(*sm, u, v) : 0.f);
             }
         }
     });

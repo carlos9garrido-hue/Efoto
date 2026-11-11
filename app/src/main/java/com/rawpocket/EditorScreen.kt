@@ -245,7 +245,7 @@ private fun ReadyScreen(
                             Group.CURVE -> CurvePreview(state.params)
                             Group.HSL -> BandPicker(band, state.params) { band = it }
                             Group.CROP -> CropPanel(state.params, crop)
-                            Group.LOCAL -> LocalPanel(state.params, maskSel, { maskSel = it }, tools.local)
+                            Group.LOCAL -> LocalPanel(state.params, maskSel, { maskSel = it }, tools.local, state.segmenting)
                             else -> Unit
                         }
                         val bandFilter = if (group == Group.HSL) Band.entries[band] else null

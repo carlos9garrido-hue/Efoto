@@ -1,9 +1,12 @@
 // Pruebas de los efectos nuevos del motor CPU: detalle (con vecinos), viñeta, grano y gradación.
+#include <algorithm>
+#include <string>
 #include <cmath>
 #include <cstdio>
 #include <vector>
 
 #include "develop.h"
+#include "segment.h"
 
 static int fails = 0;
 #define CHECK(c) do { if (!(c)) { std::printf("  FALLA línea %d: %s\n", __LINE__, #c); ++fails; } } while (0)
@@ -212,6 +215,78 @@ int main() {
         std::vector<uint8_t> g(size_t(ow) * oh * 3);
         rp::developGeometry(s.data(), W, H, cr, g.data(), ow, oh, 1);
         CHECK(mean(g, ow, ow / 2 - 2, oh / 2 - 2, ow / 2 + 2, oh / 2 + 2) > mean(g, ow, 0, 0, 4, 4) + 20);
+    }
+    // ---- máscara de sujeto ----
+    {
+        const int W = 64, H = 48;
+        std::vector<uint16_t> src(size_t(W) * H * 3, 20000);
+        // máscara 16x12: sujeto = mitad izquierda
+        rp::SubjectMask sm; sm.w = 16; sm.h = 12; sm.a.assign(16 * 12, 0);
+        for (int y = 0; y < 12; ++y) for (int x = 0; x < 8; ++x) sm.a[y * 16 + x] = 255;
+        CHECK(std::fabs(rp::maskSample(sm, 0.1f, 0.5f) - 1.f) < 1e-4f);
+        CHECK(std::fabs(rp::maskSample(sm, 0.9f, 0.5f)) < 1e-4f);
+        CHECK(std::fabs(rp::maskSample(sm, 0.5f, 0.5f) - 0.5f) < 0.02f);  // frontera: mezcla bilineal
+        // máscara tipo 3 con exposición +1: aclara la mitad izquierda; invertida, la derecha
+        rp::Params p; p.profile = 1;
+        float* m = &p.masks[0];
+        m[0] = 3; m[5] = 0.1f; m[6] = 0; m[7] = 1.f;  // tipo, feather, invert, exposición
+        std::vector<uint8_t> a(size_t(W) * H * 3), base(size_t(W) * H * 3);
+        rp::Params flat; flat.profile = 1;
+        rp::developToRgb8(src.data(), W, H, flat, base.data(), 1);
+        rp::developToRgb8(src.data(), W, H, p, a.data(), 1, nullptr, &sm);
+        auto px = [&](const std::vector<uint8_t>& v, int x, int y) { return int(v[(size_t(y) * W + x) * 3]); };
+        CHECK(px(a, 8, 24) > px(base, 8, 24) + 30);   // sujeto aclarado
+        CHECK(px(a, 56, 24) == px(base, 56, 24));     // fondo intacto
+        m[6] = 1;
+        rp::developToRgb8(src.data(), W, H, p, a.data(), 1, nullptr, &sm);
+        CHECK(px(a, 8, 24) == px(base, 8, 24) && px(a, 56, 24) > px(base, 56, 24) + 30);
+        // sin datos de máscara, la de sujeto se ignora (y la invertida no toca toda la foto)
+        rp::developToRgb8(src.data(), W, H, p, a.data(), 1, nullptr, nullptr);
+        CHECK(a == base);
+        // ampliar (x1 > 0) sube el peso en la frontera; encoger lo baja
+        m[6] = 0; m[1] = 0.8f;
+        rp::developToRgb8(src.data(), W, H, p, a.data(), 1, nullptr, &sm);
+        int grown = px(a, 32, 24);
+        m[1] = -0.8f;
+        rp::developToRgb8(src.data(), W, H, p, a.data(), 1, nullptr, &sm);
+        CHECK(grown > px(a, 32, 24) + 20);
+        // sigue a la foto original aunque se recorte: recorte izquierdo 50 % deja solo el fondo
+        m[1] = 0; rp::Params cr = p; cr.cropL = 0.5f;
+        int ow, oh; rp::outputSize(W, H, cr, ow, oh);
+        std::vector<uint8_t> g(size_t(ow) * oh * 3), g0(size_t(ow) * oh * 3);
+        rp::Params crBase = flat; crBase.cropL = 0.5f;
+        rp::developGeometry(src.data(), W, H, cr, g.data(), ow, oh, 1, nullptr, &sm);
+        rp::developGeometry(src.data(), W, H, crBase, g0.data(), ow, oh, 1);
+        CHECK(g == g0);
+    }
+    // ---- selección de sujeto: entrada del modelo y refinado ----
+    {
+        const int W = 200, H = 150;
+        std::vector<uint16_t> img(size_t(W) * H * 3);
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            bool in = std::hypot((x - 100) / 50.0, (y - 75) / 40.0) < 1.0;
+            for (int c = 0; c < 3; ++c) img[(size_t(y) * W + x) * 3 + c] = in ? 52000 : 6000;
+        }
+        std::vector<float> in(3 * rp::kSegSize * rp::kSegSize);
+        rp::segmentInput(img.data(), W, H, in.data());
+        float lo = 1e9f, hi = -1e9f; for (float v : in) { lo = std::min(lo, v); hi = std::max(hi, v); }
+        CHECK(lo > -2.2f && hi < 2.7f && hi > lo + 1.f);  // rango típico de ImageNet normalizado
+        // "predicción" borrosa en 320x320 de la misma elipse
+        std::vector<float> pred(rp::kSegSize * rp::kSegSize);
+        for (int y = 0; y < rp::kSegSize; ++y) for (int x = 0; x < rp::kSegSize; ++x) {
+            float d = std::hypot((x - 160) / 80.0f, (y - 160) / 80.0f);
+            pred[y * rp::kSegSize + x] = 1.f / (1.f + std::exp((d - 1.f) * 12.f));
+        }
+        rp::SubjectMask m;
+        rp::segmentFinish(img.data(), W, H, pred.data(), 100, m);
+        CHECK(m.w == 100 && m.h == 75 && !m.empty());  // respeta maxEdge y la proporción
+        CHECK(m.a[size_t(37) * m.w + 50] > 240);        // centro: sujeto
+        CHECK(m.a[size_t(3) * m.w + 3] < 10);           // esquina: fondo
+        std::string path = "/tmp/efoto_mask_test.bin";
+        CHECK(rp::saveSubjectMask(m, path) == 0);
+        rp::SubjectMask r; CHECK(rp::loadSubjectMask(r, path) == 0 && r.w == m.w && r.h == m.h && r.a == m.a);
+        CHECK(rp::loadSubjectMask(r, "/nonexistent/x") != 0);
+        std::remove(path.c_str());
     }
     std::printf(fails ? "FALLÓ (%d)\n" : "OK\n", fails);
     return fails ? 1 : 0;

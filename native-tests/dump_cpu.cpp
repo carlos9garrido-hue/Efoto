@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "develop.h"
+#include "segment.h"
 
 int main(int argc, char** argv) {
     if (argc != 8 + rp::Params::kCount) {
@@ -33,11 +34,19 @@ int main(int argc, char** argv) {
     if (params.hasGeometry()) rp::outputSize(w, h, params, ow, oh);
     rp::Aux aux;
     rp::buildAux(in.data(), w, h, 1, aux);
+    // PARITY_MASK = archivo de máscara de sujeto (ancho, alto y bytes), si la prueba lo necesita.
+    rp::SubjectMask subj;
+    if (const char* mp = std::getenv("PARITY_MASK")) {
+        if (rp::loadSubjectMask(subj, mp) != 0) {
+            std::fprintf(stderr, "no se pudo leer la máscara %s\n", mp);
+            return 1;
+        }
+    }
     std::vector<uint8_t> out(static_cast<size_t>(ow) * oh * 3);
     if (params.hasGeometry())
-        rp::developGeometry(in.data(), w, h, params, out.data(), ow, oh, 1, &aux);
+        rp::developGeometry(in.data(), w, h, params, out.data(), ow, oh, 1, &aux, &subj);
     else
-        rp::developToRgb8(in.data(), w, h, params, out.data(), 1, &aux);
+        rp::developToRgb8(in.data(), w, h, params, out.data(), 1, &aux, &subj);
     std::printf("%d %d\n", ow, oh);  // tamaño de la imagen final
     std::vector<uint16_t> half(static_cast<size_t>(w) * h * 4);
     rp::rgb16ToRgba16f(in.data(), w, h, half.data());

@@ -36,6 +36,25 @@ object RawNative {
     /** Capas de los efectos con vecinos (RGBA16F y RG16F, ver Aux en develop.h). Se calculan al primer uso. */
     external fun nativeFillAux(handle: Long, bufA: java.nio.ByteBuffer, bufB: java.nio.ByteBuffer): Boolean
 
+    // ---- Selección de sujeto: el modelo corre en Kotlin (SubjectSegmenter); el resto, en C++ ----
+
+    /** Entrada del modelo: 3 x 320 x 320 floats (CHW, normalizados). */
+    external fun nativeSegInput(handle: Long, out: FloatArray): Boolean
+
+    /** Salida del modelo (320 x 320) -> máscara refinada de la foto, guardada en la sesión. */
+    external fun nativeSegFinish(handle: Long, pred: FloatArray): Boolean
+
+    external fun nativeMaskWidth(handle: Long): Int
+    external fun nativeMaskHeight(handle: Long): Int
+
+    /** Copia la máscara (ancho * alto bytes) a un búfer directo. */
+    external fun nativeFillMask(handle: Long, buffer: java.nio.ByteBuffer): Boolean
+
+    /** Guarda o carga la máscara de la foto en un archivo. Devuelven 0 si salió bien. */
+    external fun nativeSaveMask(handle: Long, path: String): Int
+    external fun nativeLoadMask(handle: Long, path: String): Int
+    external fun nativeClearMask(handle: Long)
+
     external fun nativeErrorText(code: Int): String
 
     /**

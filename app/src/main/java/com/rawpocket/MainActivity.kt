@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
                             onAdd = viewModel::addMask,
                             onRemove = viewModel::removeMask,
                             onChange = viewModel::setMask,
+                            onSubject = viewModel::selectSubject,
                         ),
                     ),
                     presets = presets,

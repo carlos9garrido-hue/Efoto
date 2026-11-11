@@ -25,6 +25,7 @@ Hecho:
 - Ediciones guardadas como JSON por foto (el RAW nunca se modifica).
 - **Perfiles de color** para RAW, como los de Lightroom (Estándar, Neutro, Vívido, Paisaje, Retrato, Plano, Mono, Mono duro): curva en S, negros y saturación base antes de los deslizadores. Los JPG/PNG no lo usan porque ya traen su aspecto.
 - **Punto de partida de un RAW nuevo** como en Lightroom: nitidez 25 y reducción de ruido de color 25; la reducción de luminancia sube con el ISO (0 hasta ISO 400, tope 45). Las matrices de color de cada cámara (incluidas Nikon D3200 y D3400) vienen de la base de LibRaw.
+- **Selección de sujeto con IA** (en el teléfono, sin internet): botones «Sujeto» y «Fondo» en la herramienta Local crean una máscara con el modelo U²-Net pequeño (Apache 2.0, ONNX Runtime) y bordes ajustados a la foto con un filtro guiado. Se editan con los mismos ajustes que los degradados, con control de zona y suavidad del borde. La máscara se guarda con la foto y sigue alineada aunque se gire o recorte.
 - **Ediciones locales**: hasta 4 máscaras (degradado lineal o radial, con borde suave e inversión), cada una con exposición, contraste, luces altas, sombras, temperatura y saturación; se mueven arrastrando sus puntos sobre la foto.
 - Exportación JPEG o PNG a resolución completa a `Pictures/Efoto`.
 - Mantener pulsada la foto muestra el original.

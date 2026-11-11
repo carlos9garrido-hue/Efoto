@@ -18,7 +18,13 @@ import kotlin.math.roundToInt
 class GpuPhoto(val width: Int, val height: Int, val data: ByteBuffer, val still: Boolean = false) {
     /** Capas de los efectos con vecinos; se calculan la primera vez que hacen falta. */
     @Volatile var aux: GpuAux? = null
+
+    /** Máscara de sujeto de la IA (R8, sobre la foto original). */
+    @Volatile var mask: GpuMask? = null
 }
+
+/** Plano de 8 bits (w*h bytes) con la máscara de sujeto; 255 = sujeto. */
+class GpuMask(val w: Int, val h: Int, val data: ByteBuffer)
 
 /** RGBA16F (w*h*8 bytes) y RG16F (w*h*4 bytes), del mismo tamaño que la foto. */
 class GpuAux(val a: ByteBuffer, val b: ByteBuffer)
@@ -40,6 +46,9 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
     private var uploaded: GpuPhoto? = null
     private var uploadedAux: GpuAux? = null
     private var auxTextures = IntArray(2)
+    private var maskTexture = 0
+    private var uploadedMask: GpuMask? = null
+    private var showMaskLocation = -1
     private var outLocation = -1
     private var surfaceWidth = 1
     private var surfaceHeight = 1
@@ -80,6 +89,21 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         }
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uAuxA"), 1)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uAuxB"), 2)
+        // Máscara de sujeto (unidad 3, R8). Mientras no hay, 1x1 a cero.
+        uploadedMask = null
+        val mt = IntArray(1)
+        GLES30.glGenTextures(1, mt, 0)
+        maskTexture = mt[0]
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, maskTexture)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, 1, 1, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, ByteBuffer.allocateDirect(4))
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uSubj"), 3)
+        showMaskLocation = GLES30.glGetUniformLocation(program, "uShowMask")
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
@@ -121,12 +145,26 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
             uploadedAux = aux
         }
 
+        // Máscara de sujeto: se sube una vez. Sin ella, las máscaras de ese tipo se ignoran.
+        val mask = p.mask
+        if (mask != null && mask !== uploadedMask) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, maskTexture)
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+            mask.data.position(0)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, mask.w, mask.h, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, mask.data)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            uploadedMask = mask
+        }
+
         // La imagen final es la foto girada y recortada: su tamaño (como en outputSize() de C++)
         // decide el encuadre. Ajuste "contain": entera, centrada, sin deformarse; el zoom y el
         // desplazamiento agrandan y mueven ese rectángulo (lo que sobresale lo recorta la pantalla).
         val values = params.copyOf()
         if (p.still) values[PROFILE_INDEX] = -1f  // JPG/PNG: sin perfil de color
         if (aux == null) for (i in FX_FIRST..FX_LAST_SPATIAL) values[i] = 0f
+        if (mask == null) for (m in 0 until MASK_SLOTS) if (values[MASK_FIRST + m * MASK_STRIDE] > 2.5f) values[MASK_FIRST + m * MASK_STRIDE] = 0f
+        val showMask = if (mask != null) view.showMask.toFloat() else 0f
         val turns = Math.floor(values[ANGLE_INDEX + 1] + 0.5).toInt() and 3
         val frameW = (if (turns and 1 == 1) p.height else p.width).toFloat()
         val frameH = (if (turns and 1 == 1) p.width else p.height).toFloat()
@@ -168,9 +206,11 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
             val divX = (vx + view.splitFrac * vw).roundToInt().coerceIn(0, surfaceWidth)
             GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
             GLES30.glScissor(0, 0, divX, surfaceHeight)
+            GLES30.glUniform1f(showMaskLocation, 0f)
             GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, original, 0)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
             GLES30.glScissor(divX, 0, surfaceWidth - divX, surfaceHeight)
+            GLES30.glUniform1f(showMaskLocation, showMask)
             GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, values, 0)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
             // Línea divisoria de 3 px.
@@ -179,6 +219,7 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
         } else {
+            GLES30.glUniform1f(showMaskLocation, showMask)
             GLES30.glUniform1fv(paramsLocation, PARAM_COUNT, values, 0)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         }
@@ -229,6 +270,9 @@ class DevelopRenderer(private val context: Context, private val view: PreviewVie
         const val FX_FIRST = 45  // Params::kFxStart: claridad..ruido (color) son los efectos con vecinos
         const val FX_LAST_SPATIAL = 50
         const val PROFILE_INDEX = 113  // Params::kProfile
+        const val MASK_FIRST = 61      // Params::kMaskStart
+        const val MASK_SLOTS = 4       // Params::kMaskCount
+        const val MASK_STRIDE = 13     // Params::kMaskFloats
         const val ANGLE_INDEX = 39  // Params::kGeomStart: enderezado, giros, recorte L/T/R/B
         const val BG = 0x0A / 255f
     }

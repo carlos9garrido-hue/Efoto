@@ -63,6 +63,13 @@ struct Params {
     // 0 = Estándar. Un valor negativo lo desactiva (se usa en JPG/PNG, que ya traen su aspecto).
     float profile = 0;
 
+    // ¿Alguna máscara usa la de sujeto (tipo 3)?
+    bool usesSubject() const {
+        for (int m = 0; m < kMaskCount; ++m)
+            if (masks[m * kMaskFloats] > 2.5f) return true;
+        return false;
+    }
+
     bool hasLocal() const {
         for (int m = 0; m < kMaskCount; ++m) {
             const float* k = masks + m * kMaskFloats;
@@ -102,13 +109,28 @@ struct Aux {
 // step = 1 usa la imagen tal cual; 2 trabaja a media resolución (ahorra memoria al exportar).
 void buildAux(const uint16_t* src, int w, int h, int step, Aux& out);
 
+// Máscara de sujeto (de la IA): un plano de 8 bits sobre la imagen original (antes de girar y
+// recortar), así que sigue pegada a la foto aunque cambie la geometría. 255 = sujeto.
+struct SubjectMask {
+    int w = 0, h = 0;
+    std::vector<uint8_t> a;  // w*h
+    bool empty() const { return w <= 0 || h <= 0 || a.size() < static_cast<size_t>(w) * h; }
+};
+
+// Valor (0..1) de la máscara en (xs, ys) (0..1 sobre la fuente), con la misma bilineal que la GPU.
+float maskSample(const SubjectMask& m, float xs, float ys);
+
+// Copia de p sin las máscaras de sujeto si no hay datos de máscara.
+Params effectiveParams(const Params& p, bool haveSubject);
+
 // Tamaño de la imagen final tras girar y recortar una fuente de srcW x srcH.
 void outputSize(int srcW, int srcH, const Params& p, int& outW, int& outH);
 
 // Revela aplicando la geometría (giro, enderezado y recorte) con muestreo bilineal.
 // dst: outW * outH * 3 bytes (use outputSize). Los píxeles fuera de la foto se repiten del borde.
 void developGeometry(const uint16_t* src, int w, int h, const Params& p,
-                     uint8_t* dst, int outW, int outH, int threads, const Aux* aux = nullptr);
+                     uint8_t* dst, int outW, int outH, int threads, const Aux* aux = nullptr,
+                     const SubjectMask* subj = nullptr);
 
 class Developer {
 public:
@@ -117,7 +139,9 @@ public:
     void setOutput(int outW, int outH);
     // r,g,b: RGB lineal (1.0 = blanco). aux: 6 valores (a.rgba, b.rg) de esa posición o nullptr.
     // (u, v): posición en la imagen final (0..1). out: 3 bytes sRGB.
-    void pixel(float r, float g, float b, const float* aux, float u, float v, uint8_t* out) const;
+    // subj: valor de la máscara de sujeto en esta posición (0..1), si hay una máscara de tipo 3.
+    void pixel(float r, float g, float b, const float* aux, float u, float v, uint8_t* out,
+               float subj = 0.f) const;
     void pixel(float r, float g, float b, uint8_t* out) const { pixel(r, g, b, nullptr, 0.5f, 0.5f, out); }
 
 private:
@@ -152,10 +176,12 @@ void rgb16ToRgba16f(const uint16_t* src, int w, int h, uint16_t* dst);
 
 // Revela RGB16 -> RGBA8 (alfa = 255). dstStride en bytes.
 void developToRgba(const uint16_t* src, int w, int h, const Params& p,
-                   uint8_t* dst, int dstStride, int threads, const Aux* aux = nullptr);
+                   uint8_t* dst, int dstStride, int threads, const Aux* aux = nullptr,
+                   const SubjectMask* subj = nullptr);
 
 // Revela RGB16 -> RGB8 empaquetado (w*h*3 bytes).
 void developToRgb8(const uint16_t* src, int w, int h, const Params& p,
-                   uint8_t* dst, int threads, const Aux* aux = nullptr);
+                   uint8_t* dst, int threads, const Aux* aux = nullptr,
+                   const SubjectMask* subj = nullptr);
 
 }  // namespace rp

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "analysis.h"
+#include "segment.h"
 #include "develop.h"
 #include "raw_session.h"
 
@@ -161,6 +162,77 @@ Java_com_rawpocket_RawNative_nativeFillAux(JNIEnv* env, jobject, jlong h, jobjec
     return JNI_TRUE;
 }
 
+// ---- selección de sujeto (el modelo corre en Kotlin; ver segment.h) ----
+
+// Entrada del modelo: 3 * 320 * 320 floats.
+JNIEXPORT jboolean JNICALL
+Java_com_rawpocket_RawNative_nativeSegInput(JNIEnv* env, jobject, jlong h, jfloatArray jout) {
+    auto* s = lookup(h);
+    if (!s || !jout || s->small.empty()) return JNI_FALSE;
+    const jsize n = 3 * rp::kSegSize * rp::kSegSize;
+    if (env->GetArrayLength(jout) < n) return JNI_FALSE;
+    std::vector<float> buf(static_cast<size_t>(n));
+    rp::segmentInput(s->small.data(), s->sw, s->sh, buf.data());
+    env->SetFloatArrayRegion(jout, 0, n, buf.data());
+    return JNI_TRUE;
+}
+
+// Salida del modelo (320 x 320) -> máscara refinada de la sesión.
+JNIEXPORT jboolean JNICALL
+Java_com_rawpocket_RawNative_nativeSegFinish(JNIEnv* env, jobject, jlong h, jfloatArray jpred) {
+    auto* s = lookup(h);
+    if (!s || !jpred || s->preview.empty()) return JNI_FALSE;
+    const jsize n = rp::kSegSize * rp::kSegSize;
+    if (env->GetArrayLength(jpred) < n) return JNI_FALSE;
+    std::vector<float> pred(static_cast<size_t>(n));
+    env->GetFloatArrayRegion(jpred, 0, n, pred.data());
+    rp::segmentFinish(s->preview.data(), s->pw, s->ph, pred.data(), 1280, s->subject);
+    return !s->subject.empty();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_rawpocket_RawNative_nativeMaskWidth(JNIEnv*, jobject, jlong h) {
+    auto* s = lookup(h);
+    return s && !s->subject.empty() ? s->subject.w : 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_rawpocket_RawNative_nativeMaskHeight(JNIEnv*, jobject, jlong h) {
+    auto* s = lookup(h);
+    return s && !s->subject.empty() ? s->subject.h : 0;
+}
+
+// Copia la máscara (w * h bytes) a un ByteBuffer directo, lista para subirla como textura R8.
+JNIEXPORT jboolean JNICALL
+Java_com_rawpocket_RawNative_nativeFillMask(JNIEnv* env, jobject, jlong h, jobject buf) {
+    auto* s = lookup(h);
+    if (!s || !buf || s->subject.empty()) return JNI_FALSE;
+    void* d = env->GetDirectBufferAddress(buf);
+    const size_t n = static_cast<size_t>(s->subject.w) * s->subject.h;
+    if (!d || static_cast<size_t>(env->GetDirectBufferCapacity(buf)) < n) return JNI_FALSE;
+    std::memcpy(d, s->subject.a.data(), n);
+    return JNI_TRUE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_rawpocket_RawNative_nativeSaveMask(JNIEnv* env, jobject, jlong h, jstring jpath) {
+    auto* s = lookup(h);
+    if (!s) return -1;
+    return rp::saveSubjectMask(s->subject, toStd(env, jpath));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_rawpocket_RawNative_nativeLoadMask(JNIEnv* env, jobject, jlong h, jstring jpath) {
+    auto* s = lookup(h);
+    if (!s) return -1;
+    return rp::loadSubjectMask(s->subject, toStd(env, jpath));
+}
+
+JNIEXPORT void JNICALL
+Java_com_rawpocket_RawNative_nativeClearMask(JNIEnv*, jobject, jlong h) {
+    if (auto* s = lookup(h)) s->subject = rp::SubjectMask();
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_rawpocket_RawNative_nativeErrorText(JNIEnv* env, jobject, jint code) {
     return env->NewStringUTF(rp::errorText(code).c_str());
@@ -202,7 +274,7 @@ Java_com_rawpocket_RawNative_nativeRender(JNIEnv* env, jobject, jlong h, jfloatA
         return JNI_FALSE;
     rp::developToRgba(s->preview.data(), s->pw, s->ph, paramsFor(*s, p),
                       static_cast<uint8_t*>(pixels), static_cast<int>(info.stride),
-                      rp::workerThreads());
+                      rp::workerThreads(), nullptr, &s->subject);
     AndroidBitmap_unlockPixels(env, bitmap);
     return JNI_TRUE;
 }

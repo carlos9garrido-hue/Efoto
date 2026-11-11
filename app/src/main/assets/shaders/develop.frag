@@ -24,6 +24,10 @@ uniform sampler2D uAuxA;
 uniform sampler2D uAuxB;
 // (ancho, alto) de la imagen final y de la cuadrícula del grano.
 uniform vec4 uOut;
+// Máscara de sujeto de la IA (R8, sobre la imagen original): 255 = sujeto. Ver SubjectMask en develop.h.
+uniform sampler2D uSubj;
+// Vista de una máscara local sobre la foto: 0 = apagada, 1..4 = máscara 0..3 teñida de rojo (solo la app).
+uniform float uShowMask;
 // (cos, sin) del ángulo de enderezado, calculados fuera del shader: sin() y cos() en GPU solo
 // garantizan un error de 2^-11, que desplazaría el muestreo varias décimas de píxel.
 uniform vec2 uRot;
@@ -132,6 +136,25 @@ vec3 sampleBilinear(vec2 uv) {
     return top + (bottom - top) * t.y;
 }
 
+// Igual que maskSample() en develop.cpp: misma bilineal manual que la fuente.
+float subjectAt(vec2 uv) {
+    ivec2 sz = textureSize(uSubj, 0);
+    vec2 f = uv * vec2(sz) - 0.5;
+    vec2 fl = floor(f);
+    vec2 t = f - fl;
+    t.x = t.x < 1e-4 ? 0.0 : (t.x > 0.9999 ? 1.0 : t.x);
+    t.y = t.y < 1e-4 ? 0.0 : (t.y > 0.9999 ? 1.0 : t.y);
+    ivec2 p0 = clamp(ivec2(fl), ivec2(0), sz - 1);
+    ivec2 p1 = clamp(ivec2(fl) + 1, ivec2(0), sz - 1);
+    float a = texelFetch(uSubj, ivec2(p0.x, p0.y), 0).r;
+    float b = texelFetch(uSubj, ivec2(p1.x, p0.y), 0).r;
+    float c = texelFetch(uSubj, ivec2(p0.x, p1.y), 0).r;
+    float d = texelFetch(uSubj, ivec2(p1.x, p1.y), 0).r;
+    float top = a + (b - a) * t.x;
+    float bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
 // Igual que auxSample() en develop.cpp: misma bilineal manual que la fuente.
 void sampleAux(vec2 uv, out vec4 a, out vec2 b) {
     ivec2 sz = textureSize(uAuxA, 0);
@@ -159,7 +182,7 @@ void sampleAux(vec2 uv, out vec4 a, out vec2 b) {
 }
 
 // Peso (0..1) de la máscara m en la posición (u, v) de la imagen final (igual que maskWeight en C++).
-float maskWeight(int m, vec2 uv) {
+float maskWeight(int m, vec2 uv, float subj) {
     int b = 61 + m * 13;
     int type = int(floor(uParams[b] + 0.5));
     float w;
@@ -174,6 +197,10 @@ float maskWeight(int m, vec2 uv) {
         float e = sqrt(ex * ex + ey * ey);
         float f = min(1.0, max(uParams[b + 5], 0.02));
         w = 1.0 - smoothstep(1.0 - f, 1.0, e);
+    } else if (type == 3) {
+        float centre = 0.5 - 0.25 * clamp(uParams[b + 1], -1.0, 1.0);
+        float sft = 0.5 * min(1.0, max(uParams[b + 5], 0.02));
+        w = smoothstep(centre - sft, centre + sft, subj);
     } else {
         return 0.0;
     }
@@ -202,11 +229,14 @@ void main() {
     float shadows = uParams[3], whites = uParams[4], blacks = uParams[5];
     float temperature = uParams[6], tint = uParams[7];
     float vibrance = uParams[8], saturation = uParams[9];
+    vec2 srcUv = sourceUv(vUv);
     // Ediciones locales: los ajustes de cada máscara activa se suman, ponderados, a los globales.
+    float subj = -1.0;
     for (int m = 0; m < 4; m++) {
         int b = 61 + m * 13;
         if (uParams[b] < 0.5) continue;
-        float w = maskWeight(m, vUv);
+        if (uParams[b] > 2.5 && subj < 0.0) subj = subjectAt(srcUv);
+        float w = maskWeight(m, vUv, max(subj, 0.0));
         exposure += w * uParams[b + 7];
         contrast += w * uParams[b + 8];
         highlights += w * uParams[b + 9];
@@ -215,7 +245,6 @@ void main() {
         saturation += w * uParams[b + 12];
     }
 
-    vec2 srcUv = sourceUv(vUv);
     vec3 c = sampleBilinear(srcUv);
 
     // Efectos con vecinos (sobre la imagen lineal, antes de exposición y tonos).
@@ -364,6 +393,15 @@ void main() {
         float yq = lum(c);
         float amp = grain * 0.10 * (0.4 + 1.6 * yq * (1.0 - yq));
         c += gridNoise(gx, gy) * amp;
+    }
+
+    // Ayuda visual: tiñe la máscara elegida (no forma parte del revelado ni de la exportación).
+    if (uShowMask > 0.5) {
+        int sm = int(uShowMask + 0.5) - 1;
+        if (sm >= 0 && sm < 4 && uParams[61 + sm * 13] > 0.5) {
+            float wv = maskWeight(sm, vUv, subjectAt(srcUv));
+            c = mix(clamp(c, 0.0, 1.0), vec3(0.95, 0.2, 0.25), 0.55 * wv);
+        }
     }
 
     outColor = vec4(clamp(c, 0.0, 1.0), 1.0);

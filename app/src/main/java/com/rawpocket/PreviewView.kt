@@ -22,6 +22,9 @@ class PreviewView {
     @Volatile var splitOn = false
     @Volatile var splitFrac = 0.5f
 
+    /** Máscara que se tiñe de rojo sobre la foto mientras se edita: 0 = ninguna, 1..4 = máscara 0..3. */
+    @Volatile var showMask = 0
+
     /** Tamaño de la superficie y de la foto ajustada (sin zoom); los fija el renderizador. */
     @Volatile var surfW = 1
     @Volatile var surfH = 1

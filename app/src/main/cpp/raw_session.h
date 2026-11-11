@@ -22,6 +22,7 @@ struct Session {
     std::vector<uint16_t> small;  // vista previa reducida (~512 px) para histograma y análisis
     int sw = 0, sh = 0;
     Aux aux;  // capas de los efectos con vecinos para la vista previa (se calculan al primer uso)
+    SubjectMask subject;  // máscara de sujeto de la IA (vacía si no se ha calculado)
     std::string info;  // make|model|iso|shutter|aperture|focal|fullW|fullH
 };
 

@@ -26,6 +26,8 @@ class LocalActions(
     val onAdd: (Int) -> Int,
     val onRemove: (Int) -> Unit,
     val onChange: (Int, LocalMask, Int?) -> Unit,
+    /** (¿fondo?, callback con la máscara creada): detecta el sujeto con la IA y crea la máscara. */
+    val onSubject: (Boolean, (Int) -> Unit) -> Unit,
 )
 
 // Identificadores de los puntos de control que se arrastran sobre la foto.
@@ -113,18 +115,26 @@ fun LocalPanel(
     selected: Int,
     onSelect: (Int) -> Unit,
     actions: LocalActions,
+    segmenting: Boolean,
 ) {
     val active = (0 until EditParams.MASK_COUNT).filter { params.mask(it).isActive }
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val full = active.size >= EditParams.MASK_COUNT
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val full = active.size >= EditParams.MASK_COUNT
+            SoftButton("✦ Sujeto", { actions.onSubject(false, onSelect) }, enabled = !full && !segmenting, accent = true)
+            SoftButton("✦ Fondo", { actions.onSubject(true, onSelect) }, enabled = !full && !segmenting, accent = true)
+        }
+        if (segmenting) {
+            Text("Detectando el sujeto con IA… unos segundos.", color = Palette.Accent, fontSize = 12.sp)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SoftButton("+ Degradado lineal", { onSelect(actions.onAdd(LocalMask.LINEAR)) }, enabled = !full)
             SoftButton("+ Radial", { onSelect(actions.onAdd(LocalMask.RADIAL)) }, enabled = !full)
         }
         if (active.isEmpty()) {
             Text(
-                "Añade un degradado para aclarar u oscurecer solo una parte de la foto, " +
-                    "y arrastra sus puntos sobre la imagen.",
+                "Elige el sujeto o el fondo con IA, o añade un degradado, para editar solo una parte de la foto. " +
+                    "Los degradados se mueven arrastrando sus puntos sobre la imagen.",
                 color = Palette.TextSecondary, fontSize = 12.sp,
             )
         } else {
@@ -132,7 +142,7 @@ fun LocalPanel(
                 active.forEach { i ->
                     val m = params.mask(i)
                     SoftButton(
-                        (if (m.isLinear) "Lineal " else "Radial ") + (i + 1),
+                        (if (m.isSubject) (if (m.invert) "Fondo " else "Sujeto ") else if (m.isLinear) "Lineal " else "Radial ") + (i + 1),
                         { onSelect(i) },
                         accent = i == selected,
                     )
@@ -144,7 +154,16 @@ fun LocalPanel(
             LocalMask.ADJUSTMENTS.forEachIndexed { k, adj ->
                 LocalSliderRow(adj, m.adjust[k], selected, k, m, actions)
             }
-            if (m.isRadial) {
+            if (m.isSubject) {
+                Text("Ampliar o reducir la zona", color = Palette.TextSecondary, fontSize = 12.sp)
+                ElegantSlider(
+                    value = m.x1,
+                    onChange = { actions.onChange(selected, m.copy(x1 = it), 310000 + selected * 10 + 7) },
+                    range = -1f..1f,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (m.isRadial || m.isSubject) {
                 Text("Suavidad del borde", color = Palette.TextSecondary, fontSize = 12.sp)
                 ElegantSlider(
                     value = m.feather,

@@ -134,6 +134,15 @@ fun main() {
         check(EditParams.fromJson(mid.toJson()) == mid, "los valores iniciales sobreviven a guardar y leer")
         check(EditParams.rawDefaults(0).let { nrL.get(it) == 0f }, "sin ISO conocido no se reduce luminancia")
     }
+    run {
+        val sub = LocalMask.subject(false); val bg = LocalMask.subject(true)
+        check(sub.isSubject && sub.isActive && !sub.invert && sub.adjust[0] > 0f, "máscara de sujeto: activa y aclara")
+        check(bg.isSubject && bg.invert && bg.adjust[0] < 0f, "máscara de fondo: invertida y oscurece")
+        check(!EditParams().usesSubject && EditParams().withMask(1, sub).usesSubject, "usesSubject detecta máscaras de sujeto")
+        check(!EditParams().withMask(0, LocalMask.create(LocalMask.LINEAR)).usesSubject, "un degradado no usa la máscara de sujeto")
+        val q = EditParams().withMask(2, bg)
+        check(EditParams.fromJson(q.toJson()) == q && EditParams.fromJson(q.toJson())!!.mask(2).isSubject, "la máscara de sujeto sobrevive a guardar y leer")
+    }
     println(if (fails == 0) "TODO BIEN" else "$fails FALLOS")
     if (fails > 0) System.exit(1)
 }

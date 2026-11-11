@@ -48,6 +48,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val histogram: IntArray? = null,
         /** Sube cuando llegan las capas de detalle, para pedir un nuevo dibujo. */
         val auxVersion: Int = 0,
+        /** La IA está detectando el sujeto. */
+        val segmenting: Boolean = false,
+        /** Sube cuando se calcula o carga la máscara de sujeto de la foto. */
+        val maskVersion: Int = 0,
         val exporting: Boolean = false,
         /** Aviso breve para mostrar en un Snackbar. */
         val message: String? = null,
@@ -181,7 +185,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             fileName = name,
             info = info,
             params = params,
-            photo = GpuPhoto(w, ht, data, still = still),
+            photo = GpuPhoto(w, ht, data, still = still).also { gpu ->
+                // Máscara de sujeto guardada junto con las ediciones.
+                if (params.usesSubject && RawNative.nativeLoadMask(h, maskFile(key).absolutePath) == 0) gpu.mask = buildGpuMask(h)
+            },
         )
     }
 
@@ -266,14 +273,66 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- ediciones locales
 
     /** Crea una máscara nueva (lineal o radial) en el primer hueco libre y devuelve su posición, o -1 si no caben más. */
-    fun addMask(type: Int): Int {
+    fun addMask(type: Int, background: Boolean = false): Int {
         if (_state.value.status != Status.READY) return -1
         val params = _state.value.params
         val slot = (0 until EditParams.MASK_COUNT).firstOrNull { !params.mask(it).isActive } ?: return -1
+        val mask = if (type == LocalMask.SUBJECT) LocalMask.subject(background) else LocalMask.create(type)
         remember(null)
-        _state.update { it.copy(params = it.params.withMask(slot, LocalMask.create(type))) }
+        _state.update { it.copy(params = it.params.withMask(slot, mask)) }
         onEdited()
         return slot
+    }
+
+    private fun maskFile(key: String): File = File(editsDir(), "$key.mask")
+
+    /** Copia la máscara de sujeto de la sesión nativa a un búfer para la GPU. */
+    private fun buildGpuMask(h: Long): GpuMask? {
+        val w = RawNative.nativeMaskWidth(h)
+        val ht = RawNative.nativeMaskHeight(h)
+        if (w <= 0 || ht <= 0) return null
+        val buf = ByteBuffer.allocateDirect(w * ht)
+        return if (RawNative.nativeFillMask(h, buf)) GpuMask(w, ht, buf) else null
+    }
+
+    /** Detecta el sujeto con la IA (una sola vez por foto) y guarda la máscara. Devuelve true si salió bien. */
+    private fun detectSubject(photo: GpuPhoto): Boolean {
+        val h = handle
+        if (h <= 0L || _state.value.photo !== photo) return false
+        val input = FloatArray(3 * 320 * 320)
+        if (!RawNative.nativeSegInput(h, input)) return false
+        val pred = SubjectSegmenter.run(getApplication(), input) ?: return false
+        if (!RawNative.nativeSegFinish(h, pred)) return false
+        val gpu = buildGpuMask(h) ?: return false
+        editKey?.let { RawNative.nativeSaveMask(h, maskFile(it).absolutePath) }
+        photo.mask = gpu
+        return true
+    }
+
+    /**
+     * Crea una máscara del sujeto (o del fondo, si [background]). La primera vez detecta el sujeto
+     * con la IA, lo que tarda unos segundos; [onSlot] recibe la posición de la máscara creada.
+     */
+    fun selectSubject(background: Boolean, onSlot: (Int) -> Unit) {
+        val st = _state.value
+        val photo = st.photo
+        if (st.status != Status.READY || st.segmenting || photo == null) return
+        if (photo.mask != null) {
+            onSlot(addMask(LocalMask.SUBJECT, background))
+            return
+        }
+        _state.update { it.copy(segmenting = true) }
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.Default) { lock.withLock { detectSubject(photo) } }
+            _state.update {
+                it.copy(
+                    segmenting = false,
+                    maskVersion = it.maskVersion + 1,
+                    message = if (ok) null else "No se pudo detectar el sujeto en esta foto.",
+                )
+            }
+            if (ok) onSlot(addMask(LocalMask.SUBJECT, background))
+        }
     }
 
     fun removeMask(slot: Int) {
@@ -591,9 +650,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             input.use { i -> src.outputStream().use { o -> i.copyTo(o) } }
             h = RawNative.nativeOpen(src.absolutePath, BATCH_PREVIEW_EDGE)
             if (h <= 0L) return false
-            val params = loadEdits(editKeyFor(item.name, src.length()))
+            val itemKey = editKeyFor(item.name, src.length())
+            val params = loadEdits(itemKey)
                 ?: if (looksLikeStill(src)) EditParams()
                 else EditParams.rawDefaults(PhotoInfo.parse(RawNative.nativeInfo(h)).iso)
+            if (params.usesSubject) RawNative.nativeLoadMask(h, maskFile(itemKey).absolutePath)
             val rc = RawNative.nativeExport(h, params.toFloatArray(), tmp.absolutePath, options.quality, options.maxEdge, options.format)
             if (rc != 0) return false
             saveToGallery(tmp, "${item.name.substringBeforeLast('.', item.name)}_Efoto.${options.extension}", options.mime)

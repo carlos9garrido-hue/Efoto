@@ -21,6 +21,21 @@ const frag = fs.readFileSync(path.join(SHADERS, 'develop.frag'), 'utf8');
 const inFile = process.env.PARITY_IMAGE || path.join(work, 'in.rgb16');
 if (!process.env.PARITY_IMAGE) execFileSync('python3', [path.join(__dirname, 'gen_image.py'), inFile]);
 
+// Máscara de sujeto de prueba (no cuadrada, distinta de la imagen): mancha suave con un poco de ruido.
+const MW = 53, MH = 37;
+const maskFile = path.join(work, 'subject.mask');
+{
+  const hd = Buffer.alloc(8); hd.writeInt32LE(MW, 0); hd.writeInt32LE(MH, 4);
+  const px = Buffer.alloc(MW * MH);
+  let sd = 12345; const r = () => { sd = (sd * 1664525 + 1013904223) >>> 0; return sd / 4294967296; };
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+    const d = Math.hypot((x + 0.5) / MW - 0.45, (y + 0.5) / MH - 0.55);
+    px[y * MW + x] = Math.max(0, Math.min(255, Math.round((1 - d / 0.38) * 255 + (r() - 0.5) * 40)));
+  }
+  fs.writeFileSync(maskFile, Buffer.concat([hd, px]));
+}
+process.env.PARITY_MASK = maskFile;
+
 // Orden de los 114 parámetros (igual que Params en develop.h)
 const names = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temperature', 'tint', 'vibrance', 'saturation'];
 for (let i = 0; i < 5; i++) names.push(`curve${i}`);
@@ -81,6 +96,16 @@ cases.push({ name: 'local + global + giro', p: geo({ exposure: 0.4, contrast: 0.
 for (let k = -1; k < 8; k++) cases.push({ name: `perfil ${k}`, p: geo({ profile: k, exposure: 0.3, shadows: 0.3, highlights: -0.3 }) });
 cases.push({ name: 'perfil vívido + color + local', p: geo({ profile: 2, vibrance: 0.4, saturation: 0.3, 'rojo-sat': -0.4, ...rad(0, 0.5, 0.5, 0.4, 0.4, 0.5, { exp: 0.6 }) }) });
 cases.push({ name: 'perfil mono + gradación', p: geo({ profile: 6, shHue: 220, shSat: 0.7, hiHue: 40, hiSat: 0.6, clarity: 0.4 }) });
+const subj = (slot, o) => mk(slot, { type: 3, x1: 0, feather: 0.3, ...o });
+cases.push({ name: 'sujeto exposición', p: geo({ ...subj(0, { exp: 1.0 }) }) });
+cases.push({ name: 'sujeto fondo oscuro', p: geo({ ...subj(0, { invert: 1, exp: -1.2, sat: -0.6 }) }) });
+cases.push({ name: 'sujeto borde duro', p: geo({ ...subj(0, { feather: 0, exp: 0.8, con: 0.4 }) }) });
+cases.push({ name: 'sujeto crecer', p: geo({ ...subj(0, { x1: 0.8, feather: 0.1, exp: 1.0 }) }) });
+cases.push({ name: 'sujeto encoger', p: geo({ ...subj(0, { x1: -0.8, feather: 0.1, exp: 1.0 }) }) });
+cases.push({ name: 'sujeto + giro/recorte', p: geo({ ...subj(0, { exp: 1.0, temp: 0.5 }), rotate90: 1, angle: 9, cropL: 0.1, cropR: 0.1, cropT: 0.15, cropB: 0.05 }) });
+cases.push({ name: 'sujeto + giro 270', p: geo({ ...subj(0, { invert: 1, exp: -1 }), rotate90: 3, angle: -12, cropB: 0.2 }) });
+cases.push({ name: 'sujeto + lineal + global', p: geo({ exposure: 0.3, ...subj(0, { exp: 0.7 }), ...lin(1, 0, 0, 0, 1, { exp: -0.5 }) }) });
+cases.push({ name: 'sujeto + fondo (2 máscaras)', p: geo({ ...subj(0, { exp: 0.6, sat: 0.4 }), ...subj(1, { invert: 1, exp: -0.8, temp: -0.4 }) }) });
 cases.push({ name: 'local con ceros', p: geo({ ...mk(0, { type: 1, x1: 0, y1: 0, x2: 1, y2: 1 }), ...mk(1, { type: 2, x1: .5, y1: .5, x2: .3, y2: .3, feather: .5 }) }) });
 cases.push({ name: 'local + efectos', p: geo({ clarity: 0.5, vigAmount: -0.4, grain: 0.3, shSat: 0.4, shHue: 210, ...rad(0, 0.5, 0.5, 0.4, 0.4, 0.5, { exp: 0.6, temp: -0.4 }) }) });
 // Combinaciones pseudoaleatorias reproducibles
@@ -108,7 +133,7 @@ for (let k = 0; k < 30; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.m
   const page = await browser.newPage();
   await page.setContent(`<canvas id="c" width="${W}" height="${H}"></canvas>`);
 
-  await page.evaluate(({ vert, frag, W, H }) => {
+  await page.evaluate(({ vert, frag, W, H, maskB64, MW, MH }) => {
     const gl = document.getElementById('c').getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('WebGL2 no disponible');
     const sh = (type, src) => {
@@ -139,9 +164,22 @@ for (let k = 0; k < 30; k++) cases.push({ name: `aleatorio ${k + 1}`, p: names.m
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.uniform1i(gl.getUniformLocation(prog, name), unit);
     }
+    {  // máscara de sujeto (R8) en la unidad 3, igual que la app
+      gl.activeTexture(gl.TEXTURE3);
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      const bin = Uint8Array.from(atob(maskB64), (ch) => ch.charCodeAt(0));
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, MW, MH, 0, gl.RED, gl.UNSIGNED_BYTE, bin.subarray(8));
+      gl.uniform1i(gl.getUniformLocation(prog, 'uSubj'), 3);
+    }
     gl.activeTexture(gl.TEXTURE0);
     window.__gl = { gl, prog, W, H };
-  }, { vert, frag, W, H });
+  }, { vert, frag, W, H, maskB64: fs.readFileSync(maskFile).toString('base64'), MW, MH });
 
   let worst = 0, failed = 0;
   console.log(`${'caso'.padEnd(22)} ${'máx'.padStart(4)} ${'media'.padStart(7)} ${'>1'.padStart(6)}`);
